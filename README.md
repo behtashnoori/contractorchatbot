@@ -59,7 +59,7 @@ npm install
 npm run dev
 ```
 
-Frontend روی `http://localhost:8308` اجرا می‌شود.
+Frontend روی `http://localhost:6902` اجرا می‌شود.
 
 ## 👤 کاربران پیش‌فرض
 

@@ -6,12 +6,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     // Fixed dev port to avoid conflicts per project convention
-    port: 8308,
+    port: 6902,
     strictPort: true,
   },
   preview: {
     // Fixed preview port
-    port: 8308,
+    port: 6902,
     strictPort: true,
   },
 })
