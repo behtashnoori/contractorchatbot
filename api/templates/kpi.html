@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}KPI تامین‌کننده{% endblock %}
+{% block content %}
+<h2>KPI تامین‌کننده</h2>
+<form action="{{ url_for('kpi_page') }}" method="get">
+	<div>
+		<label>customer_uid</label>
+		<input type="text" name="supplier_uid" value="{{ q.supplier_uid }}" />
+	</div>
+	<div>
+		<label>نام تامین‌کننده</label>
+		<input type="text" name="supplier_name" value="{{ q.supplier_name }}" />
+	</div>
+	<div>
+		<label>منبع</label>
+		<select name="source">
+			<option value="all" {% if q.source=='all' %}selected{% endif %}>همه</option>
+			<option value="invoices" {% if q.source=='invoices' %}selected{% endif %}>invoices</option>
+			<option value="contractors2" {% if q.source=='contractors2' %}selected{% endif %}>contractors2</option>
+		</select>
+	</div>
+	<div>
+		<label>سال (جلالی)</label>
+		<input type="text" name="year" value="{{ q.year }}" />
+	</div>
+	<div style="margin-top:12px">
+		<button type="submit">به‌روزرسانی</button>
+		{% if q.supplier_uid or q.supplier_name %}
+		<span class="toolbar">
+			<a href="{{ url_for('export_kpi_yearly', supplier_uid=q.supplier_uid, supplier_name=q.supplier_name, source=q.source, year=q.year, format='csv') }}">دانلود CSV</a>
+			<a href="{{ url_for('export_kpi_yearly', supplier_uid=q.supplier_uid, supplier_name=q.supplier_name, source=q.source, year=q.year, format='xlsx') }}">دانلود XLSX</a>
+		</span>
+		{% endif %}
+	</div>
+</form>
+
+{% if rows and rows|length > 0 %}
+<table>
+	<thead>
+		<tr>
+			<th>منبع</th>
+			<th>customer_uid</th>
+			<th>نام تامین‌کننده</th>
+			<th>سال</th>
+			<th>وضعیت</th>
+			<th>تعداد</th>
+			<th>جمع مبلغ A</th>
+			<th>جمع مبلغ B</th>
+		</tr>
+	</thead>
+	<tbody>
+		{% for r in rows %}
+		<tr>
+			<td>{{ r.source }}</td>
+			<td>{{ r.customer_uid }}</td>
+			<td>{{ r.supplier_name }}</td>
+			<td>{{ r.year_j }}</td>
+			<td>{{ r.status }}</td>
+			<td>{{ "{:,}".format(r.count) if r.count is not none else "" }}</td>
+			<td>{{ "{:,.0f}".format(r.amount_a) if r.amount_a is not none else "" }}</td>
+			<td>{{ "{:,.0f}".format(r.amount_b) if r.amount_b is not none else "" }}</td>
+		</tr>
+		{% endfor %}
+	</tbody>
+{% else %}
+	<p>داده‌ای برای نمایش نیست. لطفاً پارامترها را وارد و جست‌وجو کنید.</p>
+{% endif %}
+</table>
+{% endblock %}
+
+
+
+
+
+

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}جست‌وجوی تامین‌کننده{% endblock %}
+{% block content %}
+<h2>جست‌وجوی تامین‌کننده</h2>
+<form action="{{ url_for('kpi_page') }}" method="get">
+	<div>
+		<label>customer_uid</label>
+		<input type="text" name="supplier_uid" placeholder="مثال: 732-0026968" />
+	</div>
+	<div>
+		<label>نام تامین‌کننده</label>
+		<input type="text" name="supplier_name" placeholder="مثال: سیاوش ایوبی (تعمیر)" />
+	</div>
+	<div>
+		<label>منبع</label>
+		<select name="source">
+			<option value="all">همه</option>
+			<option value="invoices">invoices</option>
+			<option value="contractors2">contractors2</option>
+		</select>
+	</div>
+	<div>
+		<label>سال (جلالی)</label>
+		<input type="text" name="year" placeholder="مثال: 1404" />
+	</div>
+	<div style="margin-top:12px">
+		<button type="submit">نمایش KPI</button>
+	</div>
+</form>
+{% endblock %}
+
+
+
+
+
+
