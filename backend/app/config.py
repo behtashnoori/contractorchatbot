@@ -7,7 +7,14 @@ from dotenv import load_dotenv
 
 # Load .env file before reading environment variables
 env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(env_path)
+if env_path.exists():
+    # If .env exists, use it (for local development)
+    load_dotenv(env_path)
+else:
+    # If .env doesn't exist, use production.env (for server deployment)
+    production_env_path = Path(__file__).resolve().parent.parent / "production.env"
+    if production_env_path.exists():
+        load_dotenv(production_env_path)
 
 
 @dataclass
