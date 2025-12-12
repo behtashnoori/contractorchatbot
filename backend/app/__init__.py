@@ -14,6 +14,31 @@ env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
 
+def _get_debug_log_path():
+    """Get the path to debug.log file, creating directory if needed."""
+    try:
+        # Get project root (parent of backend directory)
+        project_root = Path(__file__).parent.parent.parent
+        debug_dir = project_root / ".cursor"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        return str(debug_dir / "debug.log")
+    except Exception:
+        # Fallback: use a temp location or return None
+        return None
+
+
+def _write_debug_log(log_data):
+    """Safely write to debug log file."""
+    try:
+        log_path = _get_debug_log_path()
+        if log_path:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(log_data + '\n')
+    except Exception:
+        # Silently fail - don't break the app if logging fails
+        pass
+
+
 def create_app(settings_override: dict | None = None) -> Flask:
     app = Flask(__name__)
 
@@ -55,8 +80,7 @@ def create_app(settings_override: dict | None = None) -> Flask:
         import traceback
         origin = request.headers.get('Origin', 'no-origin') if hasattr(request, 'headers') else 'no-origin'
         error_trace = traceback.format_exc()
-        with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"id":"log_exception_handler","timestamp":int(time.time()*1000),"location":"__init__.py:handle_exception","message":"Exception caught in error handler","data":{"error":str(e),"origin":origin,"traceback":error_trace},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + '\n')
+        _write_debug_log(json.dumps({"id":"log_exception_handler","timestamp":int(time.time()*1000),"location":"__init__.py:handle_exception","message":"Exception caught in error handler","data":{"error":str(e),"origin":origin,"traceback":error_trace},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}))
         # #endregion
         
         # Create error response
@@ -112,14 +136,12 @@ def create_app(settings_override: dict | None = None) -> Flask:
         elif origin_to_use:
             # Log if origin is not in allowed list (for debugging)
             # #region agent log
-            with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"id":"log_origin_not_allowed","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"Origin not in allowed list","data":{"origin":origin_to_use,"allowed_origins":allowed_origins},"sessionId":"debug-session","runId":"run1","hypothesisId":"D"}) + '\n')
+            _write_debug_log(json.dumps({"id":"log_origin_not_allowed","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"Origin not in allowed list","data":{"origin":origin_to_use,"allowed_origins":allowed_origins},"sessionId":"debug-session","runId":"run1","hypothesisId":"D"}))
             # #endregion
         
         # #region agent log
         cors_headers_after = {k: v for k, v in response.headers.items() if 'access-control' in k.lower()}
-        with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-            f.write(json.dumps({"id":"log_after_request","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"After request handler","data":{"origin":origin,"status_code":response.status_code,"cors_headers_before":dict(cors_headers_before),"cors_headers_after":dict(cors_headers_after),"path":__import__('flask').request.path,"method":__import__('flask').request.method},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}) + '\n')
+        _write_debug_log(json.dumps({"id":"log_after_request","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"After request handler","data":{"origin":origin,"status_code":response.status_code,"cors_headers_before":dict(cors_headers_before),"cors_headers_after":dict(cors_headers_after),"path":__import__('flask').request.path,"method":__import__('flask').request.method},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
         # #endregion
         return response
 
@@ -135,8 +157,8 @@ def _init_extensions(app: Flask) -> None:
     # Using specific origins instead of "*" to avoid conflicts with supports_credentials
     # #region agent log
     import json
-    with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-        f.write(json.dumps({"id":"log_init_cors","timestamp":int(__import__('time').time()*1000),"location":"__init__.py:_init_extensions","message":"Initializing CORS","data":{"origins":["http://localhost:8308","http://localhost:3000","http://127.0.0.1:8308","http://127.0.0.1:3000"]},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}) + '\n')
+    import time
+    _write_debug_log(json.dumps({"id":"log_init_cors","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"Initializing CORS","data":{"origins":["http://localhost:8308","http://localhost:3000","http://127.0.0.1:8308","http://127.0.0.1:3000"]},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
     # #endregion
     cors.init_app(
         app,
@@ -196,8 +218,7 @@ def _init_extensions(app: Flask) -> None:
             response.headers['Access-Control-Allow-Origin'] = origin
         return response
     # #region agent log
-    with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-        f.write(json.dumps({"id":"log_cors_initialized","timestamp":int(__import__('time').time()*1000),"location":"__init__.py:_init_extensions","message":"CORS initialized","data":{},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}) + '\n')
+    _write_debug_log(json.dumps({"id":"log_cors_initialized","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"CORS initialized","data":{},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
     # #endregion
 
 
@@ -216,14 +237,11 @@ def _register_blueprints(app: Flask) -> None:
             method = __import__('flask').request.method
             path = __import__('flask').request.path
             log_data = {"id":"log_before_request","timestamp":int(time.time()*1000),"location":"__init__.py:before_request","message":"Before request","data":{"origin":origin,"method":method,"path":path},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}
-            with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps(log_data) + '\n')
+            _write_debug_log(json.dumps(log_data))
         except Exception as e:
             # Fallback: try to log the error
             try:
-                import time
-                with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-                    f.write(json.dumps({"id":"log_before_request_error","timestamp":int(time.time()*1000),"location":"__init__.py:before_request","message":"Logging error","data":{"error":str(e)},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + '\n')
+                _write_debug_log(json.dumps({"id":"log_before_request_error","timestamp":int(time.time()*1000),"location":"__init__.py:before_request","message":"Logging error","data":{"error":str(e)},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}))
             except:
                 pass
     # #endregion
@@ -236,8 +254,7 @@ def _register_blueprints(app: Flask) -> None:
             import json
             import time
             origin = __import__('flask').request.headers.get('Origin', 'no-origin')
-            with open('d:\\1-webapp\\19-contractorchatbot\\.cursor\\debug.log', 'a', encoding='utf-8') as f:
-                f.write(json.dumps({"id":"log_options_request","timestamp":int(time.time()*1000),"location":"__init__.py:handle_options","message":"OPTIONS preflight request","data":{"origin":origin,"path":__import__('flask').request.path},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}) + '\n')
+            _write_debug_log(json.dumps({"id":"log_options_request","timestamp":int(time.time()*1000),"location":"__init__.py:handle_options","message":"OPTIONS preflight request","data":{"origin":origin,"path":__import__('flask').request.path},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}))
             # #endregion
             # Flask-CORS will handle the response, but we log it
 
