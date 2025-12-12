@@ -13,6 +13,15 @@ from .routes.admin import admin_bp
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
+# Allowed CORS origins for development
+# Includes frontend ports 6902-6910 to handle automatic port selection
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+] + [f"http://localhost:{port}" for port in range(6902, 6911)] + [
+    f"http://127.0.0.1:{port}" for port in range(6902, 6911)
+]
+
 
 def _get_debug_log_path():
     """Get the path to debug.log file, creating directory if needed."""
@@ -57,12 +66,7 @@ def create_app(settings_override: dict | None = None) -> Flask:
         response = jsonify({"error": "forbidden", "message": "Access forbidden"})
         response.status_code = 403
         origin = request.headers.get('Origin')
-        allowed_origins = [
-            "http://localhost:6902",
-            "http://localhost:3000",
-            "http://127.0.0.1:6902",
-            "http://127.0.0.1:3000",
-        ]
+        allowed_origins = ALLOWED_ORIGINS
         if origin in allowed_origins:
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
@@ -88,12 +92,7 @@ def create_app(settings_override: dict | None = None) -> Flask:
         response.status_code = 500
         
         # Add CORS headers to error response
-        allowed_origins = [
-            "http://localhost:6902",
-            "http://localhost:3000",
-            "http://127.0.0.1:6902",
-            "http://127.0.0.1:3000",
-        ]
+        allowed_origins = ALLOWED_ORIGINS
         if origin in allowed_origins:
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
@@ -114,12 +113,7 @@ def create_app(settings_override: dict | None = None) -> Flask:
         # #endregion
         
         # Manual CORS header injection as fallback
-        allowed_origins = [
-            "http://localhost:6902",
-            "http://localhost:3000",
-            "http://127.0.0.1:6902",
-            "http://127.0.0.1:3000",
-        ]
+        allowed_origins = ALLOWED_ORIGINS
         
         # Check if origin is allowed (handle None/empty cases)
         origin_to_use = origin if origin and origin != 'no-origin' else None
@@ -158,18 +152,13 @@ def _init_extensions(app: Flask) -> None:
     # #region agent log
     import json
     import time
-    _write_debug_log(json.dumps({"id":"log_init_cors","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"Initializing CORS","data":{"origins":["http://localhost:6902","http://localhost:3000","http://127.0.0.1:6902","http://127.0.0.1:3000"]},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
+    _write_debug_log(json.dumps({"id":"log_init_cors","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"Initializing CORS","data":{"origins":ALLOWED_ORIGINS},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
     # #endregion
     cors.init_app(
         app,
         resources={
             r"/*": {
-                "origins": [
-                    "http://localhost:6902",
-                    "http://localhost:3000",
-                    "http://127.0.0.1:6902",
-                    "http://127.0.0.1:3000",
-                ],
+                "origins": ALLOWED_ORIGINS,
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
                 "allow_headers": [
                     "Content-Type",
@@ -194,7 +183,7 @@ def _init_extensions(app: Flask) -> None:
         response = jsonify({"error": "token_expired", "message": "Token has expired"})
         response.status_code = 401
         origin = request.headers.get('Origin')
-        if origin in ["http://localhost:6902", "http://localhost:3000", "http://127.0.0.1:6902", "http://127.0.0.1:3000"]:
+        if origin in ALLOWED_ORIGINS:
             response.headers['Access-Control-Allow-Origin'] = origin
         return response
     
@@ -204,7 +193,7 @@ def _init_extensions(app: Flask) -> None:
         response = jsonify({"error": "invalid_token", "message": "Invalid token"})
         response.status_code = 401
         origin = request.headers.get('Origin')
-        if origin in ["http://localhost:6902", "http://localhost:3000", "http://127.0.0.1:6902", "http://127.0.0.1:3000"]:
+        if origin in ALLOWED_ORIGINS:
             response.headers['Access-Control-Allow-Origin'] = origin
         return response
     
@@ -214,7 +203,7 @@ def _init_extensions(app: Flask) -> None:
         response = jsonify({"error": "unauthorized", "message": "Authorization required"})
         response.status_code = 401
         origin = request.headers.get('Origin')
-        if origin in ["http://localhost:6902", "http://localhost:3000", "http://127.0.0.1:6902", "http://127.0.0.1:3000"]:
+        if origin in ALLOWED_ORIGINS:
             response.headers['Access-Control-Allow-Origin'] = origin
         return response
     # #region agent log
