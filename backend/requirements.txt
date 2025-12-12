@@ -6,7 +6,7 @@ flask-bcrypt==1.0.1
 flask-cors==5.0.0
 python-dotenv==1.0.1
 psycopg[binary]==3.2.12
-pandas==2.2.2
+pandas>=2.2.2
 openpyxl==3.1.5
 python-dateutil==2.9.0
 convertdate==2.4.0
