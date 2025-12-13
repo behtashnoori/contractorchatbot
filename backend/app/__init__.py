@@ -24,6 +24,14 @@ ALLOWED_ORIGINS = [
     f"http://127.0.0.1:{port}" for port in range(6902, 6911)
 ]
 
+# Load additional allowed origins from environment variable (for production)
+# Format: comma-separated list of origins, e.g., "http://example.com,https://example.com"
+env_allowed_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
+if env_allowed_origins:
+    # Split by comma and strip whitespace
+    additional_origins = [origin.strip() for origin in env_allowed_origins.split(',') if origin.strip()]
+    ALLOWED_ORIGINS.extend(additional_origins)
+
 # Pattern for local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
 LOCAL_NETWORK_PATTERN = re.compile(
     r'^http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}):(690[2-9]|6910)$'
@@ -155,7 +163,7 @@ def create_app(settings_override: dict | None = None) -> Flask:
         elif origin_to_use:
             # Log if origin is not in allowed list (for debugging)
             # #region agent log
-            _write_debug_log(json.dumps({"id":"log_origin_not_allowed","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"Origin not in allowed list","data":{"origin":origin_to_use,"allowed_origins":allowed_origins},"sessionId":"debug-session","runId":"run1","hypothesisId":"D"}))
+            _write_debug_log(json.dumps({"id":"log_origin_not_allowed","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"Origin not in allowed list","data":{"origin":origin_to_use,"allowed_origins":ALLOWED_ORIGINS},"sessionId":"debug-session","runId":"run1","hypothesisId":"D"}))
             # #endregion
         
         # #region agent log
