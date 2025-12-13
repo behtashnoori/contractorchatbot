@@ -49,7 +49,7 @@ python -m scripts.seed_demo_data
 python -m flask run --host=0.0.0.0
 ```
 
-Backend روی `http://localhost:3855` اجرا می‌شود.
+Backend روی `http://localhost:8000` اجرا می‌شود.
 
 #### 2. Frontend (React)
 

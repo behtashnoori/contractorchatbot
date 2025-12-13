@@ -14,7 +14,7 @@ if sys.platform == 'win32':
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # Configuration
-BASE_URL = "http://localhost:3855"
+BASE_URL = "http://localhost:8000"
 ADMIN_USERNAME = "admin1"  # یا username admin شما
 ADMIN_PASSWORD = "password123"  # یا password admin شما
 

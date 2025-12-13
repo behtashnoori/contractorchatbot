@@ -39,8 +39,8 @@ python -m flask db upgrade
 # ساخت کاربران نمونه (پیمانکار و کارشناس)
 python -m scripts.seed_demo_data
 
-# اجرای سرور توسعه روی پورت انتخاب‌شده پروژه (3855)
-# مقدار داخل .env هم تنظیم شده: FLASK_RUN_PORT=3855
+# اجرای سرور توسعه روی پورت انتخاب‌شده پروژه (8000)
+# مقدار داخل .env هم تنظیم شده: FLASK_RUN_PORT=8000
 python -m flask run --host=0.0.0.0
 ```
 
@@ -50,7 +50,7 @@ python -m flask run --host=0.0.0.0
 - بعد از `seed_demo_data`، دو کاربر نمونه ساخته می‌شوند:
   - **پیمانکار**: username=`contractor`  password=`password123`
   - **کارشناس/ادمین**: username=`admin1`  password=`password123`
-- بک‌اند روی پورت `3855` اجرا می‌شود (در `.env` تنظیم شده: `FLASK_RUN_PORT=3855`).
+- بک‌اند روی پورت `8000` اجرا می‌شود (در `.env` تنظیم شده: `FLASK_RUN_PORT=8000`).
 
 
 ### 2) اجرای فرانت‌اند (Vite/React)
@@ -71,7 +71,7 @@ npm run dev
 
 نکات:
 - در این پروژه، Vite روی پورت ثابت `6902` اجرا می‌شود (در `vite.config.js` تنظیم شده است).
-- برای اتصال فرانت‌اند به بک‌اند روی پورت `3855`، در حالت پیش‌فرض مقدار `VITE_API_BASE_URL` را روی `http://localhost:3855` قرار دهید (در `.env` فرانت‌اند).
+- برای اتصال فرانت‌اند به بک‌اند روی پورت `8000`، در حالت پیش‌فرض مقدار `VITE_API_BASE_URL` را روی `http://localhost:8000` قرار دهید (در `.env` فرانت‌اند).
 
 
 ### مشکلات رایج و رفع اشکال
@@ -118,7 +118,7 @@ Copy-Item .\config.example.env .\.env -Force
 # ⚠️ فایل .env را ویرایش کنید و DATABASE_URL را تنظیم کنید
 python -m flask db upgrade
 python -m scripts.seed_demo_data
-# اجرای روی پورت 3855
+# اجرای روی پورت 8000
 python -m flask run --host=0.0.0.0
 ```
 
@@ -126,11 +126,11 @@ python -m flask run --host=0.0.0.0
 ```powershell
 cd frontend
 npm install
-# (اختیاری) اتصال صریح به بک‌اند روی 3855
-# echo VITE_API_BASE_URL=http://localhost:3855 > .env
+# (اختیاری) اتصال صریح به بک‌اند روی 8000
+# echo VITE_API_BASE_URL=http://localhost:8000 > .env
 npm run dev
 ```
 
-تمام! بک‌اند روی `http://localhost:3855` و فرانت‌اند روی `http://localhost:6902` بالا می‌آید.
+تمام! بک‌اند روی `http://localhost:8000` و فرانت‌اند روی `http://localhost:6902` بالا می‌آید.
 
 

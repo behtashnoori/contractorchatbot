@@ -18,9 +18,11 @@ import LockIcon from '@mui/icons-material/Lock';
 import DescriptionIcon from '@mui/icons-material/Description';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { useAuth } from '../hooks/useAuth.js';
+import { useNotification } from '../providers/NotificationProvider.jsx';
 
 export function LoginPage() {
   const { login, contractor } = useAuth();
+  const { showSuccess, showError } = useNotification();
   const navigate = useNavigate();
   const location = useLocation();
   const [form, setForm] = useState({ username: '', password: '' });
@@ -50,7 +52,9 @@ export function LoginPage() {
       // نمایش پیام خوش‌آمدگویی اگر contractor وجود داشته باشد
       if (loginData.contractor?.name) {
         setLoading(false);
-        setWelcomeMessage(`سلام ${loginData.contractor.name}! خوش آمدید.`);
+        const welcomeMsg = `سلام ${loginData.contractor.name}! خوش آمدید.`;
+        setWelcomeMessage(welcomeMsg);
+        showSuccess(welcomeMsg);
         // بعد از 2 ثانیه redirect می‌کنیم
         setTimeout(() => {
           const redirect = location.state?.from?.pathname || (role === 'expert' ? '/admin/uploads' : '/invoices');
@@ -59,6 +63,7 @@ export function LoginPage() {
       } else {
         // اگر contractor نبود، فوراً redirect می‌کنیم
         setLoading(false);
+        showSuccess('ورود موفقیت‌آمیز بود');
         const redirect = location.state?.from?.pathname || (role === 'expert' ? '/admin/uploads' : '/invoices');
         navigate(redirect, { replace: true });
       }
@@ -75,6 +80,7 @@ export function LoginPage() {
       }
       
       setError(message);
+      showError(message);
       setLoading(false);
     }
   };
@@ -83,7 +89,7 @@ export function LoginPage() {
     <Box
       sx={{
         minHeight: '100vh',
-        bgcolor: '#f5f5f5',
+        bgcolor: 'background.default',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -92,17 +98,34 @@ export function LoginPage() {
       }}
     >
       <Container maxWidth="sm">
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 4 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            mb: 4,
+            animation: 'fadeInDown 0.5s ease-out',
+            '@keyframes fadeInDown': {
+              from: { opacity: 0, transform: 'translateY(-20px)' },
+              to: { opacity: 1, transform: 'translateY(0)' },
+            },
+          }}
+        >
           <Box
             sx={{
               width: 64,
               height: 64,
-              bgcolor: '#4CAF50',
+              bgcolor: 'success.main',
               borderRadius: 2,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               mb: 2,
+              boxShadow: 2,
+              transition: 'transform 0.3s ease',
+              '&:hover': {
+                transform: 'scale(1.05)',
+              },
             }}
           >
             <DescriptionIcon sx={{ fontSize: 40, color: 'white' }} />
@@ -116,14 +139,19 @@ export function LoginPage() {
         </Box>
 
         <Paper
-          elevation={0}
+          elevation={2}
           sx={{
             p: 4,
             borderRadius: 3,
-            bgcolor: 'white',
+            bgcolor: 'background.paper',
             display: 'flex',
             flexDirection: 'column',
             gap: 3,
+            animation: 'fadeInUp 0.5s ease-out',
+            '@keyframes fadeInUp': {
+              from: { opacity: 0, transform: 'translateY(20px)' },
+              to: { opacity: 1, transform: 'translateY(0)' },
+            },
           }}
         >
           <Box>
@@ -180,15 +208,17 @@ export function LoginPage() {
               }}
               sx={{
                 '& .MuiOutlinedInput-root': {
-                  bgcolor: '#f5f5f5',
+                  bgcolor: 'background.default',
+                  transition: 'all 0.2s ease',
                   '& fieldset': {
-                    borderColor: '#e0e0e0',
+                    borderColor: 'divider',
                   },
                   '&:hover fieldset': {
-                    borderColor: '#bdbdbd',
+                    borderColor: 'primary.main',
                   },
                   '&.Mui-focused fieldset': {
-                    borderColor: '#2196F3',
+                    borderColor: 'primary.main',
+                    borderWidth: 2,
                   },
                 },
               }}
@@ -212,15 +242,17 @@ export function LoginPage() {
               }}
               sx={{
                 '& .MuiOutlinedInput-root': {
-                  bgcolor: '#f5f5f5',
+                  bgcolor: 'background.default',
+                  transition: 'all 0.2s ease',
                   '& fieldset': {
-                    borderColor: '#e0e0e0',
+                    borderColor: 'divider',
                   },
                   '&:hover fieldset': {
-                    borderColor: '#bdbdbd',
+                    borderColor: 'primary.main',
                   },
                   '&.Mui-focused fieldset': {
-                    borderColor: '#2196F3',
+                    borderColor: 'primary.main',
+                    borderWidth: 2,
                   },
                 },
               }}
@@ -235,11 +267,8 @@ export function LoginPage() {
               sx={{
                 py: 1.5,
                 borderRadius: 2,
-                bgcolor: '#2196F3',
-                '&:hover': {
-                  bgcolor: '#1976D2',
-                },
                 fontWeight: 'bold',
+                transition: 'all 0.2s ease',
               }}
             >
               {loading ? <CircularProgress size={20} color="inherit" /> : 'ورود به سیستم'}

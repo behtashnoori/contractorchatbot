@@ -1,3 +1,5 @@
+import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,6 +23,33 @@ ALLOWED_ORIGINS = [
 ] + [f"http://localhost:{port}" for port in range(6902, 6911)] + [
     f"http://127.0.0.1:{port}" for port in range(6902, 6911)
 ]
+
+# Pattern for local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+LOCAL_NETWORK_PATTERN = re.compile(
+    r'^http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}):(690[2-9]|6910)$'
+)
+
+
+def is_allowed_origin(origin):
+    """
+    Check if an origin is allowed for CORS.
+    - In development: allows localhost, 127.0.0.1, and local network IPs
+    - In production: only allows origins from ALLOWED_ORIGINS
+    """
+    if not origin:
+        return False
+    
+    # Always allow origins from ALLOWED_ORIGINS list
+    if origin in ALLOWED_ORIGINS:
+        return True
+    
+    # In development mode, also allow local network IPs
+    if os.getenv('FLASK_ENV', 'development') == 'development':
+        # Check if origin matches local network pattern
+        if LOCAL_NETWORK_PATTERN.match(origin):
+            return True
+    
+    return False
 
 
 def _get_debug_log_path():
@@ -66,8 +95,7 @@ def create_app(settings_override: dict | None = None) -> Flask:
         response = jsonify({"error": "forbidden", "message": "Access forbidden"})
         response.status_code = 403
         origin = request.headers.get('Origin')
-        allowed_origins = ALLOWED_ORIGINS
-        if origin in allowed_origins:
+        if is_allowed_origin(origin):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'
@@ -92,8 +120,7 @@ def create_app(settings_override: dict | None = None) -> Flask:
         response.status_code = 500
         
         # Add CORS headers to error response
-        allowed_origins = ALLOWED_ORIGINS
-        if origin in allowed_origins:
+        if is_allowed_origin(origin):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'
@@ -113,11 +140,9 @@ def create_app(settings_override: dict | None = None) -> Flask:
         # #endregion
         
         # Manual CORS header injection as fallback
-        allowed_origins = ALLOWED_ORIGINS
-        
         # Check if origin is allowed (handle None/empty cases)
         origin_to_use = origin if origin and origin != 'no-origin' else None
-        if origin_to_use and origin_to_use in allowed_origins:
+        if is_allowed_origin(origin_to_use):
             # Add CORS headers if not already present
             if 'Access-Control-Allow-Origin' not in response.headers:
                 response.headers['Access-Control-Allow-Origin'] = origin_to_use
@@ -147,18 +172,19 @@ def _init_extensions(app: Flask) -> None:
     migrate.init_app(app, db)
     jwt.init_app(app)
     bcrypt.init_app(app)
-    # CORS configuration - explicit origins for development
-    # Using specific origins instead of "*" to avoid conflicts with supports_credentials
+    # CORS configuration - dynamic origin validation
+    # In development: allows localhost, 127.0.0.1, and local network IPs
+    # In production: only allows origins from ALLOWED_ORIGINS
     # #region agent log
     import json
     import time
-    _write_debug_log(json.dumps({"id":"log_init_cors","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"Initializing CORS","data":{"origins":ALLOWED_ORIGINS},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
+    _write_debug_log(json.dumps({"id":"log_init_cors","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"Initializing CORS","data":{"mode":os.getenv('FLASK_ENV', 'development'),"allowed_origins":ALLOWED_ORIGINS},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
     # #endregion
     cors.init_app(
         app,
         resources={
             r"/*": {
-                "origins": ALLOWED_ORIGINS,
+                "origins": is_allowed_origin,  # Use function for dynamic validation
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
                 "allow_headers": [
                     "Content-Type",
@@ -183,7 +209,7 @@ def _init_extensions(app: Flask) -> None:
         response = jsonify({"error": "token_expired", "message": "Token has expired"})
         response.status_code = 401
         origin = request.headers.get('Origin')
-        if origin in ALLOWED_ORIGINS:
+        if is_allowed_origin(origin):
             response.headers['Access-Control-Allow-Origin'] = origin
         return response
     
@@ -193,7 +219,7 @@ def _init_extensions(app: Flask) -> None:
         response = jsonify({"error": "invalid_token", "message": "Invalid token"})
         response.status_code = 401
         origin = request.headers.get('Origin')
-        if origin in ALLOWED_ORIGINS:
+        if is_allowed_origin(origin):
             response.headers['Access-Control-Allow-Origin'] = origin
         return response
     
@@ -203,7 +229,7 @@ def _init_extensions(app: Flask) -> None:
         response = jsonify({"error": "unauthorized", "message": "Authorization required"})
         response.status_code = 401
         origin = request.headers.get('Origin')
-        if origin in ALLOWED_ORIGINS:
+        if is_allowed_origin(origin):
             response.headers['Access-Control-Allow-Origin'] = origin
         return response
     # #region agent log

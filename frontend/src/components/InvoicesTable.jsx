@@ -9,6 +9,13 @@ import TableRow from '@mui/material/TableRow';
 import TablePagination from '@mui/material/TablePagination';
 import Chip from '@mui/material/Chip';
 import Button from '@mui/material/Button';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import Grid from '@mui/material/Grid';
+import Box from '@mui/material/Box';
+import Divider from '@mui/material/Divider';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs from 'dayjs';
 import jalaliday from 'jalaliday';
@@ -17,36 +24,187 @@ dayjs.extend(jalaliday);
 
 export function InvoicesTable({ data, pagination, onPageChange, onPageSizeChange, onView }) {
   const formatDate = (date) => (date ? dayjs(date).calendar('jalali').format('YYYY/MM/DD') : '-');
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
+  // Card View for Mobile
+  if (isMobile && data.length > 0) {
+    return (
+      <Box>
+        {data.map((row) => (
+          <Card
+            key={row.cover_number}
+            elevation={0}
+            sx={{
+              mb: 2,
+              borderRadius: 2,
+              bgcolor: 'white',
+              border: '1px solid #e0e0e0',
+            }}
+          >
+            <CardContent sx={{ p: 2.5 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                  {row.cover_number}
+                </Typography>
+                {row.status && (
+                  (() => {
+                    // تعیین رنگ بر اساس نوع وضعیت (هماهنگ با DashboardPage)
+                    let chipColor, chipBgColor, chipTextColor;
+                    if (row.status === 'تاييد شده' || row.status === 'تایید شده' || row.status === 'approved') {
+                      // تایید شده: سبز پررنگ
+                      chipColor = '#2E7D32';
+                      chipBgColor = '#E8F5E9';
+                      chipTextColor = '#2E7D32';
+                    } else if (row.status === 'ثبت شده' || row.status === 'registered') {
+                      // ثبت شده: سبز کم رنگ
+                      chipColor = '#66BB6A';
+                      chipBgColor = '#F1F8E9';
+                      chipTextColor = '#66BB6A';
+                    } else if (row.status === 'معلق' || row.status === 'pending' || row.status === 'در انتظار' || row.status === 'جاری') {
+                      // معلق: نارنجی
+                      chipColor = '#FF9800';
+                      chipBgColor = '#FFF8E1';
+                      chipTextColor = '#FF9800';
+                    } else if (row.status === 'عودت شده' || row.status === 'rejected' || row.status === 'رد شده') {
+                      // عودت شده: قرمز
+                      chipColor = '#F44336';
+                      chipBgColor = '#FCE4EC';
+                      chipTextColor = '#F44336';
+                    } else {
+                      // پیش‌فرض
+                      chipColor = '#2196F3';
+                      chipBgColor = '#E3F2FD';
+                      chipTextColor = '#2196F3';
+                    }
+                    
+                    return (
+                      <Chip
+                        label={row.status}
+                        size="small"
+                        sx={{
+                          fontWeight: 'bold',
+                          bgcolor: chipBgColor,
+                          color: chipTextColor,
+                          border: `1px solid ${chipColor}`,
+                        }}
+                      />
+                    );
+                  })()
+                )}
+              </Box>
+              <Divider sx={{ my: 2 }} />
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 6 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                    تاریخ ایجاد فاکتور
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {formatDate(row.invoice_created_at)}
+                  </Typography>
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                    تحویل به ناظر
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {formatDate(row.delivered_to_supervisor_at)}
+                  </Typography>
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                    تحویل به حسابداری
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {formatDate(row.delivered_to_accounting_at)}
+                  </Typography>
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                    مبلغ ناخالص
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {row.gross_amount.toLocaleString('fa-IR')} ریال
+                  </Typography>
+                </Grid>
+                <Grid size={{ xs: 6 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                    مبلغ خالص
+                  </Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                    {row.net_amount.toLocaleString('fa-IR')} ریال
+                  </Typography>
+                </Grid>
+                <Grid size={{ xs: 12 }}>
+                  <Button
+                    variant="contained"
+                    fullWidth
+                    onClick={() => onView(row.cover_number)}
+                    startIcon={<VisibilityIcon />}
+                    sx={{
+                      mt: 1,
+                      borderRadius: 2,
+                      textTransform: 'none',
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    مشاهده جزئیات
+                  </Button>
+                </Grid>
+              </Grid>
+            </CardContent>
+          </Card>
+        ))}
+        <TablePagination
+          component="div"
+          count={pagination.total}
+          page={pagination.page - 1}
+          rowsPerPage={pagination.page_size}
+          onPageChange={(_, newPage) => onPageChange(newPage + 1)}
+          onRowsPerPageChange={(event) => onPageSizeChange(parseInt(event.target.value, 10))}
+          rowsPerPageOptions={[10, 20, 50]}
+          labelRowsPerPage="تعداد در صفحه"
+          labelDisplayedRows={({ from, to, count }) => `${from}-${to} از ${count}`}
+          sx={{
+            direction: 'ltr',
+            '& .MuiTablePagination-actions': { direction: 'ltr' },
+            flexWrap: 'wrap',
+          }}
+        />
+      </Box>
+    );
+  }
+
+  // Table View for Desktop
   return (
     <Paper elevation={0} sx={{ overflow: 'hidden', borderRadius: 2, bgcolor: 'white' }}>
-      <TableContainer>
-        <Table>
+      <TableContainer sx={{ maxHeight: 'calc(100vh - 400px)', overflowX: 'auto' }}>
+        <Table stickyHeader>
           <TableHead>
             <TableRow sx={{ bgcolor: '#f5f5f5' }}>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                 شماره روکش
               </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', md: 'table-cell' } }}>
                 تاریخ ایجاد فاکتور
               </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', lg: 'table-cell' } }}>
                 تحویل به ناظر
               </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', lg: 'table-cell' } }}>
                 تحویل به حسابداری
               </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
-                وضعیت
-              </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                 مبلغ ناخالص
               </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', sm: 'table-cell' } }}>
                 مبلغ خالص
               </TableCell>
-              <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                 جزئیات
+              </TableCell>
+              <TableCell align="right" sx={{ fontWeight: 'bold', fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+                وضعیت
               </TableCell>
             </TableRow>
           </TableHead>
@@ -60,31 +218,13 @@ export function InvoicesTable({ data, pagination, onPageChange, onPageSizeChange
             ) : (
               data.map((row) => (
                 <TableRow key={row.cover_number} hover>
-                  <TableCell align="right">{row.cover_number}</TableCell>
-                  <TableCell align="right">{formatDate(row.invoice_created_at)}</TableCell>
-                  <TableCell align="right">{formatDate(row.delivered_to_supervisor_at)}</TableCell>
-                  <TableCell align="right">{formatDate(row.delivered_to_accounting_at)}</TableCell>
-                  <TableCell align="right">
-                    {row.status ? (
-                      <Chip
-                        label={row.status}
-                        size="small"
-                        color={
-                          row.status === 'تاييد شده' || row.status === 'تایید شده'
-                            ? 'success'
-                            : row.status === 'در انتظار'
-                              ? 'warning'
-                              : 'error'
-                        }
-                        sx={{ fontWeight: 'bold' }}
-                      />
-                    ) : (
-                      '-'
-                    )}
-                  </TableCell>
-                  <TableCell align="right">{row.gross_amount.toLocaleString('fa-IR')}</TableCell>
-                  <TableCell align="right">{row.net_amount.toLocaleString('fa-IR')}</TableCell>
-                  <TableCell align="right">
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>{row.cover_number}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', md: 'table-cell' } }}>{formatDate(row.invoice_created_at)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', lg: 'table-cell' } }}>{formatDate(row.delivered_to_supervisor_at)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', lg: 'table-cell' } }}>{formatDate(row.delivered_to_accounting_at)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>{row.gross_amount.toLocaleString('fa-IR')}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' }, display: { xs: 'none', sm: 'table-cell' } }}>{row.net_amount.toLocaleString('fa-IR')}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
                     <Button
                       variant="outlined"
                       size="small"
@@ -93,6 +233,8 @@ export function InvoicesTable({ data, pagination, onPageChange, onPageSizeChange
                       sx={{
                         borderRadius: 2,
                         textTransform: 'none',
+                        fontSize: { xs: '0.7rem', sm: '0.875rem' },
+                        px: { xs: 1, sm: 2 },
                         '&:hover': {
                           bgcolor: 'primary.light',
                           borderColor: 'primary.main',
@@ -101,6 +243,55 @@ export function InvoicesTable({ data, pagination, onPageChange, onPageSizeChange
                     >
                       جزئیات
                     </Button>
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
+                    {row.status ? (
+                      (() => {
+                        // تعیین رنگ بر اساس نوع وضعیت (هماهنگ با DashboardPage)
+                        let chipColor, chipBgColor, chipTextColor;
+                        if (row.status === 'تاييد شده' || row.status === 'تایید شده' || row.status === 'approved') {
+                          // تایید شده: سبز پررنگ
+                          chipColor = '#2E7D32';
+                          chipBgColor = '#E8F5E9';
+                          chipTextColor = '#2E7D32';
+                        } else if (row.status === 'ثبت شده' || row.status === 'registered') {
+                          // ثبت شده: سبز کم رنگ
+                          chipColor = '#66BB6A';
+                          chipBgColor = '#F1F8E9';
+                          chipTextColor = '#66BB6A';
+                        } else if (row.status === 'معلق' || row.status === 'pending' || row.status === 'در انتظار' || row.status === 'جاری') {
+                          // معلق: نارنجی
+                          chipColor = '#FF9800';
+                          chipBgColor = '#FFF8E1';
+                          chipTextColor = '#FF9800';
+                        } else if (row.status === 'عودت شده' || row.status === 'rejected' || row.status === 'رد شده') {
+                          // عودت شده: قرمز
+                          chipColor = '#F44336';
+                          chipBgColor = '#FCE4EC';
+                          chipTextColor = '#F44336';
+                        } else {
+                          // پیش‌فرض
+                          chipColor = '#2196F3';
+                          chipBgColor = '#E3F2FD';
+                          chipTextColor = '#2196F3';
+                        }
+                        
+                        return (
+                          <Chip
+                            label={row.status}
+                            size="small"
+                            sx={{
+                              fontWeight: 'bold',
+                              bgcolor: chipBgColor,
+                              color: chipTextColor,
+                              border: `1px solid ${chipColor}`,
+                            }}
+                          />
+                        );
+                      })()
+                    ) : (
+                      '-'
+                    )}
                   </TableCell>
                 </TableRow>
               ))

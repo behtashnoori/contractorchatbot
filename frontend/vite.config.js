@@ -7,6 +7,7 @@ export default defineConfig({
   server: {
     // Fixed dev port to avoid conflicts per project convention
     port: 6902,
+    host: '0.0.0.0',  // Allow access from network
     strictPort: false,  // اگر پورت اشغال بود، پورت بعدی را امتحان کند
   },
   preview: {

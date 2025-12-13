@@ -17,12 +17,12 @@ export function AppLayout({ title, actions, children }) {
   const isAdmin = user?.username?.toLowerCase().startsWith('admin') || user?.username?.toLowerCase() === 'expert';
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: '#f5f5f5', color: 'text.primary', direction: 'rtl' }}>
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', color: 'text.primary', direction: 'rtl' }}>
       <AppBar
         position="static"
         sx={{
-          bgcolor: '#1976D2',
-          boxShadow: 'none',
+          bgcolor: 'primary.main',
+          boxShadow: 1,
         }}
       >
         <Toolbar sx={{ display: 'flex', justifyContent: 'space-between', py: 1.5 }}>
@@ -107,16 +107,52 @@ export function AppLayout({ title, actions, children }) {
       </AppBar>
       <Container maxWidth="xl" sx={{ py: 4, px: { xs: 2, sm: 3, md: 4 } }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <Box sx={{ display: 'flex', flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 2 }}>
-            <Box>
-              <Typography variant="h4" sx={{ fontWeight: 'bold', mb: 0.5 }}>
-                {title}
-              </Typography>
-            </Box>
-            <Box>{actions}</Box>
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: { xs: 'column', sm: 'row' },
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+              mb: 1,
+            }}
+          >
+            <Typography
+              variant="h4"
+              sx={{
+                fontWeight: 'bold',
+                mb: 0,
+                textAlign: 'center',
+                width: { xs: '100%', sm: 'auto' },
+              }}
+            >
+              {title}
+            </Typography>
+            {actions && (
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: { xs: '100%', sm: 'auto' },
+                }}
+              >
+                {actions}
+              </Box>
+            )}
           </Box>
-          <Divider />
-          {children}
+          <Divider sx={{ borderColor: 'divider' }} />
+          <Box
+            sx={{
+              animation: 'fadeIn 0.3s ease-in',
+              '@keyframes fadeIn': {
+                from: { opacity: 0, transform: 'translateY(10px)' },
+                to: { opacity: 1, transform: 'translateY(0)' },
+              },
+            }}
+          >
+            {children}
+          </Box>
         </Box>
       </Container>
     </Box>

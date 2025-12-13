@@ -1,6 +1,6 @@
 import { createTheme } from '@mui/material/styles';
 
-const theme = createTheme({
+const commonTheme = {
   direction: 'rtl',
   typography: {
     fontFamily: "'Vazirmatn', 'Segoe UI', 'Tahoma', 'Arial', sans-serif",
@@ -78,6 +78,11 @@ const theme = createTheme({
           fontFamily: "'Vazirmatn', 'Segoe UI', 'Tahoma', 'Arial', sans-serif",
           borderRadius: 8,
           fontWeight: 500,
+          transition: 'all 0.2s ease-in-out',
+          '&:hover': {
+            transform: 'translateY(-1px)',
+            boxShadow: 2,
+          },
         },
       },
     },
@@ -99,8 +104,67 @@ const theme = createTheme({
       styleOverrides: {
         root: {
           fontFamily: "'Vazirmatn', 'Segoe UI', 'Tahoma', 'Arial', sans-serif",
+          transition: 'all 0.2s ease-in-out',
         },
       },
+    },
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          transition: 'all 0.3s ease-in-out',
+          '&:hover': {
+            transform: 'translateY(-2px)',
+          },
+        },
+      },
+    },
+    MuiPaper: {
+      styleOverrides: {
+        root: {
+          transition: 'all 0.3s ease-in-out',
+        },
+      },
+    },
+  },
+};
+
+// Theme
+const theme = createTheme({
+  ...commonTheme,
+  palette: {
+    mode: 'light',
+    primary: {
+      main: '#1976D2',
+      light: '#42A5F5',
+      dark: '#1565C0',
+    },
+    secondary: {
+      main: '#9C27B0',
+      light: '#BA68C8',
+      dark: '#7B1FA2',
+    },
+    success: {
+      main: '#4CAF50',
+      light: '#81C784',
+      dark: '#2E7D32',
+    },
+    warning: {
+      main: '#FF9800',
+      light: '#FFB74D',
+      dark: '#F57C00',
+    },
+    error: {
+      main: '#F44336',
+      light: '#E57373',
+      dark: '#C62828',
+    },
+    background: {
+      default: '#f5f5f5',
+      paper: '#ffffff',
+    },
+    text: {
+      primary: 'rgba(0, 0, 0, 0.87)',
+      secondary: 'rgba(0, 0, 0, 0.6)',
     },
   },
 });

@@ -44,7 +44,7 @@ export function FiltersBar({ filters, onChange, onReset }) {
         onChange={handleInput('search')}
         sx={{
           flex: 1,
-          minWidth: 280,
+          minWidth: { xs: '100%', sm: 280 },
           '& .MuiOutlinedInput-root': {
             bgcolor: '#f5f5f5',
             '& fieldset': {
@@ -72,7 +72,7 @@ export function FiltersBar({ filters, onChange, onReset }) {
         value={filters.status ?? ''}
         onChange={handleInput('status')}
         sx={{
-          minWidth: 180,
+          minWidth: { xs: '100%', sm: 180 },
           '& .MuiOutlinedInput-root': {
             bgcolor: '#f5f5f5',
             '& fieldset': {
@@ -104,12 +104,13 @@ export function FiltersBar({ filters, onChange, onReset }) {
         variant="contained"
         onClick={() => onChange(filters)}
         startIcon={<SearchIcon />}
+        fullWidth={{ xs: true, sm: false }}
         sx={{
           bgcolor: '#2196F3',
           '&:hover': {
             bgcolor: '#1976D2',
           },
-          px: 3,
+          px: { xs: 2, sm: 3 },
           py: 1.5,
           borderRadius: 2,
           fontWeight: 'bold',

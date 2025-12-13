@@ -5,6 +5,7 @@ from datetime import datetime
 
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declared_attr
+from sqlalchemy import Index
 
 from ..extensions import db
 
@@ -87,6 +88,12 @@ class InvoiceSummary(TimestampMixin, BaseModel):
         primaryjoin="InvoiceSummary.cover_number==foreign(InvoiceDetail.cover_number)",
         viewonly=True,
     )
+    
+    __table_args__ = (
+        Index('idx_invoice_summary_detail_supplier', 'detail_code', 'supplier_code'),
+        Index('idx_invoice_summary_cover_detail', 'cover_number', 'detail_code'),
+        Index('idx_invoice_summary_created_status', 'invoice_created_at', 'invoice_status'),
+    )
 
 
 class InvoiceDetail(TimestampMixin, BaseModel):
@@ -112,6 +119,11 @@ class InvoiceDetail(TimestampMixin, BaseModel):
 
     contractor = db.relationship("Contractor", back_populates="invoice_details")
     batch = db.relationship("ImportBatch", back_populates="invoice_details")
+    
+    __table_args__ = (
+        Index('idx_invoice_detail_supplier_cover', 'supplier_code', 'cover_number'),
+        Index('idx_invoice_detail_cover_detail', 'cover_number', 'detail_code'),
+    )
 
 
 class User(TimestampMixin, BaseModel):

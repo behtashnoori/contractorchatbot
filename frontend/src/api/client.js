@@ -1,7 +1,43 @@
 import axios from 'axios';
 import { authStorage } from './authStorage.js';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+/**
+ * تشخیص خودکار API Base URL
+ * - اگر VITE_API_BASE_URL تنظیم شده باشد (production)، از آن استفاده می‌کند
+ * - اگر hostname localhost یا 127.0.0.1 باشد، از localhost:8000 استفاده می‌کند
+ * - در غیر این صورت (دسترسی از شبکه)، از همان hostname استفاده می‌کند
+ */
+const getApiBaseUrl = () => {
+  // اولویت 1: اگر environment variable تنظیم شده باشد (برای production)
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  
+  // در مرورگر (client-side)
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    const port = window.location.port;
+    
+    // اگر localhost یا 127.0.0.1 باشد، از localhost:8000 استفاده کن
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:8000';
+    }
+    
+    // در غیر این صورت (دسترسی از شبکه)، از همان hostname استفاده کن
+    // فرض می‌کنیم backend روی پورت 8000 اجرا می‌شود
+    return `http://${hostname}:8000`;
+  }
+  
+  // Fallback برای server-side rendering
+  return 'http://localhost:8000';
+};
+
+const API_BASE_URL = getApiBaseUrl();
+
+// Log برای debugging (فقط در development)
+if (import.meta.env.DEV) {
+  console.log('[API Client] Base URL:', API_BASE_URL);
+}
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
