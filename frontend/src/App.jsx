@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import CircularProgress from '@mui/material/CircularProgress';
 import Box from '@mui/material/Box';
 import { ProtectedRoute } from './components/ProtectedRoute.jsx';
+import { ErrorBoundary } from './components/ErrorBoundary.jsx';
 
 const LoginPage = lazy(() => import('./pages/LoginPage.jsx').then((module) => ({ default: module.LoginPage })));
 const LandingPage = lazy(() => import('./pages/LandingPage.jsx').then((module) => ({ default: module.LandingPage })));
@@ -26,20 +27,22 @@ function LoadingScreen() {
 
 export function App() {
   return (
-    <BrowserRouter>
-      <Suspense fallback={<LoadingScreen />}>
-        <Routes>
-          <Route path="/" element={<LandingPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route element={<ProtectedRoute />}>
-            <Route path="/invoices" element={<DashboardPage />} />
-            <Route path="/invoice/:coverNumber" element={<InvoiceDetailPage />} />
-            <Route path="/admin/uploads" element={<AdminUploadPage />} />
-          </Route>
-          <Route path="*" element={<LandingPage />} />
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Suspense fallback={<LoadingScreen />}>
+          <Routes>
+            <Route path="/" element={<LandingPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route element={<ProtectedRoute />}>
+              <Route path="/invoices" element={<DashboardPage />} />
+              <Route path="/invoice/:coverNumber" element={<InvoiceDetailPage />} />
+              <Route path="/admin/uploads" element={<AdminUploadPage />} />
+            </Route>
+            <Route path="*" element={<LandingPage />} />
+          </Routes>
+        </Suspense>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 

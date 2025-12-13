@@ -7,6 +7,23 @@ import { AuthProvider } from './providers/AuthProvider.jsx'
 import { ThemeProvider } from './providers/ThemeProvider.jsx'
 import { NotificationProvider } from './providers/NotificationProvider.jsx'
 
+// Global error handlers for debugging
+window.addEventListener('error', (event) => {
+  console.error('Global error:', event.error);
+  console.error('Error message:', event.message);
+  console.error('Error filename:', event.filename);
+  console.error('Error lineno:', event.lineno);
+  console.error('Error colno:', event.colno);
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('Unhandled promise rejection:', event.reason);
+  console.error('Promise rejection details:', {
+    reason: event.reason,
+    stack: event.reason?.stack,
+  });
+});
+
 const queryClient = new QueryClient()
 
 createRoot(document.getElementById('root')).render(
