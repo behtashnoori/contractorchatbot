@@ -43,13 +43,44 @@ def is_allowed_origin(origin):
     Check if an origin is allowed for CORS.
     - In development: allows localhost, 127.0.0.1, and local network IPs
     - In production: only allows origins from ALLOWED_ORIGINS
+    - Also supports IP-based matching for mobile compatibility
     """
     if not origin:
         return False
     
-    # Always allow origins from ALLOWED_ORIGINS list
+    # Always allow origins from ALLOWED_ORIGINS list (exact match)
     if origin in ALLOWED_ORIGINS:
         return True
+    
+    # IP-based matching for mobile compatibility
+    # Some mobile browsers might send origin with slightly different format
+    # Extract IP from origin
+    try:
+        if origin.startswith('http://') or origin.startswith('https://'):
+            origin_clean = origin.replace('http://', '').replace('https://', '')
+            origin_parts = origin_clean.split(':')
+            origin_ip = origin_parts[0] if origin_parts else None
+            
+            # Check if any allowed origin has the same IP
+            for allowed in ALLOWED_ORIGINS:
+                if allowed.startswith('http://') or allowed.startswith('https://'):
+                    allowed_clean = allowed.replace('http://', '').replace('https://', '')
+                    allowed_parts = allowed_clean.split(':')
+                    allowed_ip = allowed_parts[0] if allowed_parts else None
+                    
+                    # If IPs match, allow it (for mobile compatibility)
+                    if origin_ip and allowed_ip and origin_ip == allowed_ip:
+                        # Also check if ports match (if both have ports)
+                        origin_port = origin_parts[1] if len(origin_parts) > 1 else None
+                        allowed_port = allowed_parts[1] if len(allowed_parts) > 1 else None
+                        
+                        # If both have ports, they must match
+                        # If one doesn't have port, allow it (for flexibility)
+                        if not origin_port or not allowed_port or origin_port == allowed_port:
+                            return True
+    except Exception:
+        # If parsing fails, continue with other checks
+        pass
     
     # In development mode, also allow local network IPs
     if os.getenv('FLASK_ENV', 'development') == 'development':

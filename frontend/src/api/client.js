@@ -34,9 +34,14 @@ const getApiBaseUrl = () => {
 
 const API_BASE_URL = getApiBaseUrl();
 
-// Log برای debugging (فقط در development)
-if (import.meta.env.DEV) {
-  console.log('[API Client] Base URL:', API_BASE_URL);
+// Log برای debugging (همیشه log کن برای troubleshooting موبایل)
+console.log('[API Client] Base URL:', API_BASE_URL);
+if (typeof window !== 'undefined') {
+  console.log('[API Client] Window location:', window.location.href);
+  console.log('[API Client] Hostname:', window.location.hostname);
+  console.log('[API Client] Port:', window.location.port);
+  console.log('[API Client] Origin:', window.location.origin);
+  console.log('[API Client] User Agent:', navigator.userAgent);
 }
 
 export const apiClient = axios.create({
