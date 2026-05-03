@@ -5,9 +5,9 @@ Seed demo contractor and users for local development.
 
 Creates:
 - Contractor: detail_code='CNT-DEMO', name='پیمانکار نمونه', status='فعال'
-- User (contractor): username='contractor', password='password123'
-- User (expert-like admin): username='admin1', password='password123' (also linked to a contractor)
-- User (expert): username='expert', password='expert123' (also linked to CNT-ADMIN contractor)
+- User (contractor): username='contractor' (password set in code; not printed)
+- User (expert-like admin): username='admin1' (password set in code; not printed)
+- User (expert): username='expert' (password set in code; not printed)
 
 Usage (from project root, with venv active):
 
@@ -84,9 +84,11 @@ def main() -> None:
         expert_user = get_or_create_user("expert", "expert123", admin_contractor, role="staff")
 
         print("== Demo seed complete ==")
-        print(f"- Contractor user: username=contractor  password=password123  contractor={demo_contractor.detail_code}")
-        print(f"- Expert/Admin user: username=admin1  password=password123  contractor={admin_contractor.detail_code}")
-        print(f"- Expert user: username=expert  password=expert123  contractor={admin_contractor.detail_code}")
+        print(
+            f"- Users: contractor, admin1, expert (passwords are not logged; see source for dev credentials)"
+        )
+        print(f"- CNT-DEMO contractor: {demo_contractor.detail_code}")
+        print(f"- CNT-ADMIN contractor: {admin_contractor.detail_code}")
 
 
 if __name__ == "__main__":

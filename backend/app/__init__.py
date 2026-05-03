@@ -1,5 +1,6 @@
 import logging
 import os
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -7,6 +8,7 @@ from flask import Flask
 
 from .config import Settings
 from .extensions import db, migrate, jwt, bcrypt, cors
+from .utils.api_errors import client_error_code, error_response
 from .routes.auth import auth_bp
 from .routes.invoices import invoices_bp
 from .routes.admin import admin_bp
@@ -16,38 +18,128 @@ env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
 
-def _parse_cors_origins() -> list[str]:
+def _parse_cors_origins_required() -> list[str]:
     raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
     if not raw:
-        if os.getenv("FLASK_ENV", "development") == "production":
-            return []
-        # Minimal local defaults when unset (development only)
-        return [
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ]
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+        raise RuntimeError(
+            "CORS_ALLOWED_ORIGINS must be set to a comma-separated list of allowed origins."
+        )
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if not origins:
+        raise RuntimeError(
+            "CORS_ALLOWED_ORIGINS must be set to a comma-separated list of allowed origins."
+        )
+    return origins
 
 
-ALLOWED_ORIGINS = _parse_cors_origins()
-
-
-def is_allowed_origin(origin):
-    """Allow only origins explicitly listed via CORS_ALLOWED_ORIGINS (or dev fallback)."""
+def is_allowed_origin(origin) -> bool:
+    """Allow only origins explicitly listed via CORS_ALLOWED_ORIGINS."""
     if not origin:
         return False
-    return origin in ALLOWED_ORIGINS
+    from flask import has_app_context, current_app
+
+    if not has_app_context():
+        return False
+    allowed = current_app.config.get("CORS_ALLOWED_ORIGINS_LIST") or []
+    return origin in allowed
+
+
+# Reject common unsafe literals (exact match). No default secrets in Settings.
+_PLACEHOLDER_SECRET_KEYS = frozenset(
+    {"", "change-me", "changeme", "secret", "your-secret-here", "dev"}
+)
+_PLACEHOLDER_JWT_KEYS = frozenset(
+    {"", "change-me-asap", "changeme", "secret", "your-secret-here", "dev"}
+)
+_MIN_SECRET_LEN = 32
+
+
+def _validate_environment(app: Flask) -> None:
+    """
+    Fail fast: require DATABASE_URL, SECRET_KEY, JWT secret, and CORS.
+    Rejects empty values, known placeholders, and short secrets in all environments.
+    """
+    db_uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "").strip()
+    if not db_uri:
+        raise RuntimeError("DATABASE_URL must be set to a non-empty value.")
+
+    sk = (app.config.get("SECRET_KEY") or "").strip()
+    if not sk:
+        raise RuntimeError("SECRET_KEY must be set to a non-empty value.")
+    if sk in _PLACEHOLDER_SECRET_KEYS:
+        raise RuntimeError("SECRET_KEY must not use a placeholder or trivial value.")
+    if len(sk) < _MIN_SECRET_LEN:
+        raise RuntimeError(
+            f"SECRET_KEY must be at least {_MIN_SECRET_LEN} characters (use a long random value)."
+        )
+
+    jwtk = (app.config.get("JWT_SECRET_KEY") or "").strip()
+    if not jwtk:
+        raise RuntimeError(
+            "JWT_SECRET_KEY (or JWT_SECRET) must be set to a non-empty value."
+        )
+    if jwtk in _PLACEHOLDER_JWT_KEYS:
+        raise RuntimeError("JWT signing key must not use a placeholder or trivial value.")
+    if len(jwtk) < _MIN_SECRET_LEN:
+        raise RuntimeError(
+            f"JWT_SECRET_KEY must be at least {_MIN_SECRET_LEN} characters (use a long random value)."
+        )
+
+    cors_origins = _parse_cors_origins_required()
+    app.config["CORS_ALLOWED_ORIGINS_LIST"] = cors_origins
+
+
+def _validate_production_security(app: Flask) -> None:
+    """Extra rules when FLASK_ENV is production (DEBUG must be off)."""
+    if os.getenv("FLASK_ENV", "development") != "production":
+        return
+    if app.config.get("DEBUG"):
+        raise RuntimeError("DEBUG must be disabled in production (set FLASK_DEBUG=0).")
+
+
+def _validate_runtime_settings(app: Flask) -> None:
+    """Validate numeric and size-related config after Settings are loaded."""
+    rounds = app.config.get("BCRYPT_LOG_ROUNDS")
+    if not isinstance(rounds, int) or rounds < 10 or rounds > 16:
+        raise RuntimeError(
+            "BCRYPT_LOG_ROUNDS must be an integer from 10 to 16 inclusive."
+        )
+    access = app.config.get("JWT_ACCESS_TOKEN_EXPIRES")
+    refresh = app.config.get("JWT_REFRESH_TOKEN_EXPIRES")
+    if not isinstance(access, int) or access <= 0:
+        raise RuntimeError("JWT_ACCESS_TOKEN_EXPIRES must be a positive integer (seconds).")
+    if not isinstance(refresh, int) or refresh <= 0:
+        raise RuntimeError(
+            "JWT_REFRESH_TOKEN_EXPIRES must be a positive integer (seconds)."
+        )
+    mcl = app.config.get("MAX_CONTENT_LENGTH")
+    if not isinstance(mcl, int) or mcl <= 0:
+        raise RuntimeError("MAX_CONTENT_LENGTH must be a positive integer.")
+
+
+_DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+_DEFAULT_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
 def _configure_logging(app: Flask) -> None:
+    # In production, prefer a reverse proxy or Werkzeug config so access logs
+    # do not retain Authorization headers.
     level_name = os.getenv("LOG_LEVEL", "DEBUG" if app.debug else "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
+    fmt = (os.getenv("LOG_FORMAT") or _DEFAULT_LOG_FORMAT).strip() or _DEFAULT_LOG_FORMAT
+    datefmt = (os.getenv("LOG_DATEFMT") or _DEFAULT_LOG_DATEFMT).strip() or _DEFAULT_LOG_DATEFMT
+    formatter = logging.Formatter(fmt=fmt, datefmt=datefmt)
     root = logging.getLogger()
-    if not root.handlers:
-        logging.basicConfig(level=level)
     root.setLevel(level)
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.setLevel(level)
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    else:
+        for handler in root.handlers:
+            if handler.formatter is None:
+                handler.setFormatter(formatter)
     app.logger.setLevel(level)
 
 
@@ -58,28 +150,23 @@ def create_app(settings_override: dict | None = None) -> Flask:
     if settings_override:
         app.config.update(settings_override)
 
-    db_uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "").strip()
-    if not db_uri:
-        raise RuntimeError("DATABASE_URL must be set in the environment.")
+    _validate_environment(app)
+    _validate_production_security(app)
+    _validate_runtime_settings(app)
 
-    if os.getenv("FLASK_ENV", "development") == "production":
-        if not ALLOWED_ORIGINS:
-            raise RuntimeError(
-                "CORS_ALLOWED_ORIGINS must be set to a comma-separated list in production."
-            )
+    cors_origins = app.config["CORS_ALLOWED_ORIGINS_LIST"]
 
     _configure_logging(app)
 
-    _init_extensions(app)
+    _init_extensions(app, cors_origins)
     _register_blueprints(app)
 
     # Error handler for 403 Forbidden to ensure CORS headers
     @app.errorhandler(403)
     def handle_forbidden(e):
-        from flask import request, jsonify
+        from flask import request
 
-        response = jsonify({"error": "forbidden", "message": "Access forbidden"})
-        response.status_code = 403
+        response, _ = error_response(403, "forbidden", "Access forbidden")
         origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
@@ -97,25 +184,42 @@ def create_app(settings_override: dict | None = None) -> Flask:
 
     @app.errorhandler(Exception)
     def handle_exception(e):
-        from flask import jsonify, request
+        from flask import request
+        from jwt.exceptions import PyJWTError
         from werkzeug.exceptions import HTTPException
+
+        if isinstance(e, PyJWTError):
+            response, _ = error_response(401, "invalid_token", "Invalid token")
+            origin = request.headers.get("Origin")
+            if is_allowed_origin(origin):
+                response.headers["Access-Control-Allow-Origin"] = origin
+            return response
 
         origin = request.headers.get("Origin")
 
         if isinstance(e, HTTPException):
-            response = jsonify(
-                {"error": "http_error", "message": e.description}
-            )
-            response.status_code = e.code
+            code = e.code or 500
+            if code >= 500:
+                error_id = str(uuid.uuid4())
+                app.logger.exception("HTTP exception [%s]", error_id)
+                response, _ = error_response(
+                    code,
+                    "internal_error",
+                    "An unexpected error occurred",
+                    error_id=error_id,
+                )
+            else:
+                err_key = client_error_code(code)
+                response, _ = error_response(code, err_key, e.description or "")
         else:
-            app.logger.exception("Unhandled exception")
-            response = jsonify(
-                {
-                    "error": "internal_server_error",
-                    "message": "An unexpected error occurred",
-                }
+            error_id = str(uuid.uuid4())
+            app.logger.exception("Unhandled exception [%s]", error_id)
+            response, _ = error_response(
+                500,
+                "internal_error",
+                "An unexpected error occurred",
+                error_id=error_id,
             )
-            response.status_code = 500
 
         if origin and is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
@@ -152,12 +256,17 @@ def create_app(settings_override: dict | None = None) -> Flask:
                 response.headers["Access-Control-Expose-Headers"] = (
                     "Content-Type, Authorization"
                 )
+        # Minimal CSP for JSON API responses (SPA is served separately).
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        )
         return response
 
     return app
 
 
-def _init_extensions(app: Flask) -> None:
+def _init_extensions(app: Flask, cors_origins: list[str]) -> None:
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
@@ -166,7 +275,9 @@ def _init_extensions(app: Flask) -> None:
         app,
         resources={
             r"/*": {
-                "origins": is_allowed_origin,
+                # Use explicit list (not a callable) so flask-cors error paths do not
+                # mis-handle origins when resolving exceptions (see flask-cors 5 / PyJWT).
+                "origins": cors_origins,
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
                 "allow_headers": [
                     "Content-Type",
@@ -186,10 +297,9 @@ def _init_extensions(app: Flask) -> None:
 
     @jwt.expired_token_loader
     def expired_token_callback(jwt_header, jwt_payload):
-        from flask import request, jsonify
+        from flask import request
 
-        response = jsonify({"error": "token_expired", "message": "Token has expired"})
-        response.status_code = 401
+        response, _ = error_response(401, "token_expired", "Token has expired")
         origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
@@ -197,10 +307,10 @@ def _init_extensions(app: Flask) -> None:
 
     @jwt.invalid_token_loader
     def invalid_token_callback(error):
-        from flask import request, jsonify
+        from flask import request
 
-        response = jsonify({"error": "invalid_token", "message": "Invalid token"})
-        response.status_code = 401
+        # Never log ``error`` (may echo token-adjacent material from PyJWT).
+        response, _ = error_response(401, "invalid_token", "Invalid token")
         origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
@@ -208,10 +318,13 @@ def _init_extensions(app: Flask) -> None:
 
     @jwt.unauthorized_loader
     def unauthorized_callback(error):
-        from flask import request, jsonify
+        from flask import request
 
-        response = jsonify({"error": "unauthorized", "message": "Authorization required"})
-        response.status_code = 401
+        response, _ = error_response(
+            401,
+            "missing_authorization",
+            "Authorization required",
+        )
         origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin

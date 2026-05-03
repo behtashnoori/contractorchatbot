@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,8 @@ from werkzeug.datastructures import FileStorage
 from ..extensions import db
 from ..models import ImportBatch, ImportError, InvoiceSummary, InvoiceDetail
 from .import_utils import normalize_code, normalize_str, parse_jalali, parse_decimal
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -69,30 +72,30 @@ class ContractorsOneImporter:
 
     def run(self, file_obj: FileStorage) -> ImportResult:
         try:
-            print(f"[ContractorsOneImporter] Reading Excel file...")
+            logger.info("Reading Excel file")
             dataframe = pd.read_excel(file_obj)
-            print(f"[ContractorsOneImporter] Excel file read successfully. Rows: {len(dataframe)}")
+            logger.info("Excel file read successfully, rows=%s", len(dataframe))
         except Exception as exc:  # pragma: no cover
             raise ValueError("خطا در خواندن فایل اکسل") from exc
 
-        print(f"[ContractorsOneImporter] Mapping headers...")
+        logger.info("Mapping headers")
         column_map = self._map_headers(dataframe.columns)
-        print(f"[ContractorsOneImporter] Mapped {len(column_map)} columns")
+        logger.info("Mapped %s columns", len(column_map))
         missing = [key for key in REQUIRED_KEYS if key not in column_map]
         if missing:
             raise ValueError(f"ستون های حیاتی یافت نشدند: {', '.join(missing)}")
 
         # Delete all existing data before importing new data
-        print(f"[ContractorsOneImporter] Deleting existing data...")
-        
+        logger.info("Deleting existing data")
+
         # First, delete all InvoiceSummary records (they reference ImportBatch)
         deleted_summaries = db.session.query(InvoiceSummary).delete()
-        print(f"[ContractorsOneImporter] Deleted {deleted_summaries} existing InvoiceSummary records")
-        
+        logger.info("Deleted %s existing InvoiceSummary records", deleted_summaries)
+
         # Also delete InvoiceDetail records that reference these summaries (via cover_number)
         # This is important because InvoiceDetail depends on InvoiceSummary
         deleted_details = db.session.query(InvoiceDetail).delete()
-        print(f"[ContractorsOneImporter] Deleted {deleted_details} existing InvoiceDetail records (dependent data)")
+        logger.info("Deleted %s existing InvoiceDetail records (dependent data)", deleted_details)
         
         # Then delete ImportError records for contractors-1 batches (excluding current batch)
         contractors_one_batch_ids = [
@@ -101,20 +104,20 @@ class ContractorsOneImporter:
         ]
         if contractors_one_batch_ids:
             deleted_errors = ImportError.query.filter(ImportError.batch_id.in_(contractors_one_batch_ids)).delete()
-            print(f"[ContractorsOneImporter] Deleted {deleted_errors} ImportError records")
+            logger.info("Deleted %s ImportError records", deleted_errors)
         
         # Finally delete ImportBatch records (excluding current batch)
         deleted_batches = ImportBatch.query.filter(
             ImportBatch.source == "contractors-1",
             ImportBatch.id != self.batch.id  # Exclude current batch
         ).delete()
-        print(f"[ContractorsOneImporter] Deleted {deleted_batches} ImportBatch records")
+        logger.info("Deleted %s ImportBatch records", deleted_batches)
         
         db.session.commit()
 
         inserted, updated, errors = 0, 0, 0
         total_rows = len(dataframe)
-        print(f"[ContractorsOneImporter] Total rows to process: {total_rows}")
+        logger.info("Total rows to process: %s", total_rows)
         
         # Update batch with total rows
         db.session.refresh(self.batch)
@@ -122,24 +125,29 @@ class ContractorsOneImporter:
         self.batch.rows_processed = 0
         self.batch.progress_percentage = 0.0
         db.session.commit()
-        print(f"[ContractorsOneImporter] Batch initialized: total_rows={self.batch.total_rows}, rows_processed={self.batch.rows_processed}, progress_percentage={self.batch.progress_percentage}")
+        logger.info(
+            "Batch initialized: total_rows=%s rows_processed=%s progress_percentage=%s",
+            self.batch.total_rows,
+            self.batch.rows_processed,
+            self.batch.progress_percentage,
+        )
         
         # Use COPY command for large files (>1000 rows) - much faster
         USE_COPY = total_rows > 1000
         if USE_COPY:
-            print(f"[ContractorsOneImporter] Using COPY command for large file ({total_rows} rows)")
+            logger.info("Using COPY command for large file (%s rows)", total_rows)
             return self._run_with_copy(dataframe, column_map, total_rows)
         
         # Adaptive batch size: larger batches for larger files, but cap at 1000
         # This balances memory usage with commit frequency
         BATCH_SIZE = min(max(200, total_rows // 10), 1000)
-        print(f"[ContractorsOneImporter] Using batch size: {BATCH_SIZE} for {total_rows} rows")
+        logger.info("Using batch size: %s for %s rows", BATCH_SIZE, total_rows)
         
         # Convert to dict records for faster iteration
         rows_dict = dataframe.to_dict('records')
         
         # Prepare bulk data
-        print(f"[ContractorsOneImporter] Processing {total_rows} rows...")
+        logger.info("Processing %s rows", total_rows)
         
         insert_data = []
         error_records = []
@@ -175,7 +183,14 @@ class ContractorsOneImporter:
                         
                         # Update progress
                         self.batch.update_progress(idx + 1, total_rows)
-                        print(f"[ContractorsOneImporter] Progress updated: {idx + 1}/{total_rows} ({self.batch.progress_percentage:.1f}%) - inserted: {inserted}, errors: {errors}")
+                        logger.info(
+                            "Progress updated: %s/%s (%.1f%%) inserted=%s errors=%s",
+                            idx + 1,
+                            total_rows,
+                            self.batch.progress_percentage,
+                            inserted,
+                            errors,
+                        )
                         
                 except Exception as exc:  # pragma: no cover - defensive logging
                     errors += 1
@@ -196,7 +211,7 @@ class ContractorsOneImporter:
             
             # Final progress update
             self.batch.update_progress(total_rows, total_rows)
-            print(f"[ContractorsOneImporter] Final progress: {total_rows}/{total_rows} (100%)")
+            logger.info("Final progress: %s/%s (100%%)", total_rows, total_rows)
             
         finally:
             # Restore original autoflush setting
@@ -204,7 +219,12 @@ class ContractorsOneImporter:
         
         # Final commit to ensure all changes are saved
         db.session.commit()
-        print(f"[ContractorsOneImporter] Final commit completed. Total: {inserted} inserted, {updated} updated, {errors} errors")
+        logger.info(
+            "Final commit completed: inserted=%s updated=%s errors=%s",
+            inserted,
+            updated,
+            errors,
+        )
         return ImportResult(inserted=inserted, updated=updated, errors=errors)
 
     def _map_headers(self, columns: list[Any]) -> dict[str, str]:
@@ -282,7 +302,7 @@ class ContractorsOneImporter:
             db.session.commit()  # Commit after each batch instead of flush - prevents timeout
         except Exception as exc:
             db.session.rollback()
-            print(f"[ContractorsOneImporter] Error in _bulk_process: {str(exc)}")
+            logger.exception("Error in _bulk_process: %s", exc)
             traceback.print_exc()
             raise  # Re-raise to be handled by caller
 
@@ -296,7 +316,7 @@ class ContractorsOneImporter:
             db.session.commit()  # Commit after each batch instead of flush - prevents timeout
         except Exception as exc:
             db.session.rollback()
-            print(f"[ContractorsOneImporter] Error in _bulk_process_insert_only: {str(exc)}")
+            logger.exception("Error in _bulk_process_insert_only: %s", exc)
             traceback.print_exc()
             raise  # Re-raise to be handled by caller
 
@@ -377,19 +397,24 @@ class ContractorsOneImporter:
             if error_records:
                 db.session.bulk_insert_mappings(ImportError, error_records)
                 db.session.commit()
-                print(f"[ContractorsOneImporter] Successfully inserted {len(error_records)} error records")
+                logger.info("Successfully inserted %s error records", len(error_records))
         except Exception as exc:
-            print(f"[ContractorsOneImporter] Error inserting error records: {str(exc)}")
+            logger.exception("Error inserting error records: %s", exc)
             db.session.rollback()
             traceback.print_exc()
         
         # Final progress update
         self.batch.update_progress(total_rows, total_rows)
-        print(f"[ContractorsOneImporter] Final progress: {total_rows}/{total_rows} (100%)")
-        
+        logger.info("Final progress: %s/%s (100%%)", total_rows, total_rows)
+
         # Final commit to ensure all changes are saved
         db.session.commit()
-        print(f"[ContractorsOneImporter] COPY completed. Total: {inserted} inserted, {updated} updated, {errors} errors")
+        logger.info(
+            "COPY completed: inserted=%s updated=%s errors=%s",
+            inserted,
+            updated,
+            errors,
+        )
         return ImportResult(inserted=inserted, updated=updated, errors=errors)
     
     def _copy_insert(self, rows: list[dict]):
@@ -403,10 +428,10 @@ class ContractorsOneImporter:
             # For now, use bulk_insert_mappings which is still fast and handles types correctly
             db.session.bulk_insert_mappings(InvoiceSummary, rows)
             db.session.commit()
-            print(f"[ContractorsOneImporter] Successfully inserted {len(rows)} rows")
+            logger.info("Successfully inserted %s rows", len(rows))
         except Exception as exc:
             db.session.rollback()
-            print(f"[ContractorsOneImporter] Error inserting {len(rows)} rows: {str(exc)}")
+            logger.exception("Error inserting %s rows: %s", len(rows), exc)
             traceback.print_exc()
             raise  # Re-raise to be handled by caller
 

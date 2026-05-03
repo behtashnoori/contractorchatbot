@@ -23,7 +23,7 @@ class ExcelImporter:
     def run(self, cod_detail: Path, surface: Path, details: Path) -> ImportResult:
         # NOTE: Implement parsing logic using pandas/openpyxl here.
         # Current implementation stores placeholders only.
-        self.batch.status = "completed"
+        self.batch.status = "done"
         db.session.commit()
         return ImportResult(inserted=0, updated=0, errors=0)
 

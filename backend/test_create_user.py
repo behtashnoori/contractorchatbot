@@ -3,6 +3,7 @@
 """
 اسکریپت تست برای ایجاد کاربر و تست login
 """
+import os
 import requests
 import json
 import sys
@@ -13,10 +14,10 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-# Configuration
-BASE_URL = "http://localhost:8000"
-ADMIN_USERNAME = "admin1"  # یا username admin شما
-ADMIN_PASSWORD = "password123"  # یا password admin شما
+# Configuration (set in environment; no defaults for credentials)
+BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:8000")
+ADMIN_USERNAME = os.environ.get("TEST_ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 # Contractor info
 DETAIL_CODE = "0026968"
@@ -50,6 +51,10 @@ def generate_password(detail_code, supplier_code):
     return password
 
 def main():
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        print("Set TEST_ADMIN_USERNAME and TEST_ADMIN_PASSWORD in the environment.")
+        return
+
     print("=" * 60)
     print("تست ایجاد کاربر و Login")
     print("=" * 60)
@@ -60,7 +65,7 @@ def main():
     
     print(f"\n📝 اطلاعات تولید شده:")
     print(f"  Username: {username}")
-    print(f"  Password: {password}")
+    print("  (password not printed)")
     
     # Step 1: Login as admin
     print(f"\n🔐 Step 1: ورود به عنوان Admin...")
@@ -174,7 +179,6 @@ def main():
             user_data = create_user_response.json()
             print("✅ کاربر با موفقیت ایجاد شد!")
             print(f"  Username: {user_data['username']}")
-            print(f"  Password: {user_data['password']}")
             # Update username and password for test
             username = user_data['username']
             password = user_data['password']
@@ -189,7 +193,6 @@ def main():
                 # Password should be based on contractor's actual detail_code
                 detail_code_actual = contractor['detail_code']
                 password = f"{detail_code_actual}@{contractor['supplier_code']}"
-                print(f"  Password محاسبه شده: {password}")
             else:
                 print(f"❌ خطا: {error_data.get('message', 'Unknown error')}")
                 return
@@ -214,7 +217,6 @@ def main():
         if test_login_response.status_code == 200:
             print("✅ Login موفق بود!")
             login_data = test_login_response.json()
-            print(f"  Access Token: {login_data['access_token'][:20]}...")
             if login_data.get("contractor"):
                 print(f"  Contractor: {login_data['contractor']['name']}")
         else:
@@ -230,9 +232,7 @@ def main():
     print("\n" + "=" * 60)
     print("✅ تست کامل شد!")
     print("=" * 60)
-    print(f"\n📋 اطلاعات ورود:")
-    print(f"  Username: {username}")
-    print(f"  Password: {password}")
+    print(f"\n📋 Username used for login test: {username}")
 
 if __name__ == "__main__":
     main()

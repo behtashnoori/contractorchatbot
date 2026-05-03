@@ -203,3 +203,18 @@ class ImportError(TimestampMixin, BaseModel):
 
     batch = db.relationship("ImportBatch", back_populates="errors")
 
+
+class AuditLog(BaseModel):
+    """Append-only audit trail for key actions (no sensitive payloads)."""
+
+    user_id = db.Column(
+        UUID(as_uuid=True),
+        db.ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    action = db.Column(db.String(64), nullable=False, index=True)
+    entity = db.Column(db.String(64), nullable=False)
+    entity_id = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+

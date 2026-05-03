@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import traceback
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -12,6 +13,8 @@ from werkzeug.datastructures import FileStorage
 
 from ..extensions import db
 from ..models import ImportBatch, ImportError, InvoiceDetail, InvoiceSummary
+
+logger = logging.getLogger(__name__)
 
 PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
@@ -46,20 +49,20 @@ class ContractorsTwoImporter:
 
     def run(self, file_obj: FileStorage) -> ImportResult:
         try:
-            print(f"[ContractorsTwoImporter] Reading Excel file...")
+            logger.info("Reading Excel file")
             dataframe = pd.read_excel(file_obj)
-            print(f"[ContractorsTwoImporter] Excel file read successfully. Rows: {len(dataframe)}")
+            logger.info("Excel file read successfully, rows=%s", len(dataframe))
         except Exception as exc:
             raise ValueError("خطا در خواندن فایل اکسل") from exc
 
         self._prepare_columns(dataframe)
 
         # Delete all existing data before importing new data
-        print(f"[ContractorsTwoImporter] Deleting existing data...")
-        
+        logger.info("Deleting existing data")
+
         # First, delete all InvoiceDetail records (they reference ImportBatch)
         deleted_details = db.session.query(InvoiceDetail).delete()
-        print(f"[ContractorsTwoImporter] Deleted {deleted_details} existing InvoiceDetail records")
+        logger.info("Deleted %s existing InvoiceDetail records", deleted_details)
         
         # Then delete ImportError records for contractors-2 batches (excluding current batch)
         contractors_two_batch_ids = [
@@ -68,14 +71,14 @@ class ContractorsTwoImporter:
         ]
         if contractors_two_batch_ids:
             deleted_errors = ImportError.query.filter(ImportError.batch_id.in_(contractors_two_batch_ids)).delete()
-            print(f"[ContractorsTwoImporter] Deleted {deleted_errors} ImportError records")
+            logger.info("Deleted %s ImportError records", deleted_errors)
         
         # Finally delete ImportBatch records (excluding current batch)
         deleted_batches = ImportBatch.query.filter(
             ImportBatch.source == "contractors-2",
             ImportBatch.id != self.batch.id  # Exclude current batch
         ).delete()
-        print(f"[ContractorsTwoImporter] Deleted {deleted_batches} ImportBatch records")
+        logger.info("Deleted %s ImportBatch records", deleted_batches)
         
         db.session.commit()
 
@@ -91,12 +94,12 @@ class ContractorsTwoImporter:
         # Use COPY command for large files (>1000 rows) - much faster
         USE_COPY = total_rows > 1000
         if USE_COPY:
-            print(f"[ContractorsTwoImporter] Using COPY command for large file ({total_rows} rows)")
+            logger.info("Using COPY command for large file (%s rows)", total_rows)
             return self._run_with_copy(dataframe, total_rows)
         
         # Adaptive batch size: larger batches for larger files, but cap at 1000
         BATCH_SIZE = min(max(200, total_rows // 10), 1000)
-        print(f"[ContractorsTwoImporter] Using batch size: {BATCH_SIZE} for {total_rows} rows")
+        logger.info("Using batch size: %s for %s rows", BATCH_SIZE, total_rows)
         
         rows_dict = dataframe.to_dict('records')
         
@@ -114,10 +117,13 @@ class ContractorsTwoImporter:
                 InvoiceSummary.cover_number.in_(cover_numbers_in_file)
             ).all()
         }
-        print(f"[ContractorsTwoImporter] Loaded {len(summaries_by_cover)} InvoiceSummary records for cover_number mapping")
+        logger.info(
+            "Loaded %s InvoiceSummary records for cover_number mapping",
+            len(summaries_by_cover),
+        )
         
         # Prepare bulk data
-        print(f"[ContractorsTwoImporter] Processing {total_rows} rows...")
+        logger.info("Processing %s rows", total_rows)
         
         insert_data = []
         error_records = []
@@ -155,7 +161,13 @@ class ContractorsTwoImporter:
                         # Update progress
                         self.batch.update_progress(idx + 1, total_rows)
                         
-                        print(f"[ContractorsTwoImporter] Processed batch: {idx + 1}/{total_rows} rows (inserted: {inserted}, errors: {errors})")
+                        logger.info(
+                            "Processed batch: %s/%s rows inserted=%s errors=%s",
+                            idx + 1,
+                            total_rows,
+                            inserted,
+                            errors,
+                        )
                         
                 except Exception as exc:
                     errors += 1
@@ -181,7 +193,7 @@ class ContractorsTwoImporter:
             # Restore original autoflush setting
             db.session.autoflush = original_autoflush
         
-        print(f"[ContractorsTwoImporter] Final commit completed. Total: {inserted} inserted, {errors} errors")
+        logger.info("Final commit completed: inserted=%s errors=%s", inserted, errors)
         return ImportResult(inserted=inserted, updated=updated, errors=errors)
 
     def _prepare_columns(self, frame: pd.DataFrame) -> None:
@@ -281,7 +293,7 @@ class ContractorsTwoImporter:
             db.session.commit()
         except Exception as exc:
             db.session.rollback()
-            print(f"[ContractorsTwoImporter] Error in _bulk_process: {str(exc)}")
+            logger.exception("Error in _bulk_process: %s", exc)
             traceback.print_exc()
             raise
 
@@ -295,7 +307,7 @@ class ContractorsTwoImporter:
             db.session.commit()
         except Exception as exc:
             db.session.rollback()
-            print(f"[ContractorsTwoImporter] Error in _bulk_process_insert_only: {str(exc)}")
+            logger.exception("Error in _bulk_process_insert_only: %s", exc)
             traceback.print_exc()
             raise
 
@@ -367,16 +379,16 @@ class ContractorsTwoImporter:
             if error_records:
                 db.session.bulk_insert_mappings(ImportError, error_records)
                 db.session.commit()
-                print(f"[ContractorsTwoImporter] Successfully inserted {len(error_records)} error records")
+                logger.info("Successfully inserted %s error records", len(error_records))
         except Exception as exc:
-            print(f"[ContractorsTwoImporter] Error inserting error records: {str(exc)}")
+            logger.exception("Error inserting error records: %s", exc)
             db.session.rollback()
             traceback.print_exc()
         
         # Final progress update
         self.batch.update_progress(total_rows, total_rows)
         
-        print(f"[ContractorsTwoImporter] COPY completed. Total: {inserted} inserted, {errors} errors")
+        logger.info("COPY completed: inserted=%s errors=%s", inserted, errors)
         return ImportResult(inserted=inserted, updated=updated, errors=errors)
     
     def _copy_insert(self, rows: list[dict]):
@@ -387,10 +399,10 @@ class ContractorsTwoImporter:
         try:
             db.session.bulk_insert_mappings(InvoiceDetail, rows)
             db.session.commit()
-            print(f"[ContractorsTwoImporter] Successfully inserted {len(rows)} rows")
+            logger.info("Successfully inserted %s rows", len(rows))
         except Exception as exc:
             db.session.rollback()
-            print(f"[ContractorsTwoImporter] Error inserting {len(rows)} rows: {str(exc)}")
+            logger.exception("Error inserting %s rows: %s", len(rows), exc)
             traceback.print_exc()
             raise
 

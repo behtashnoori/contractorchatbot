@@ -7,6 +7,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import { useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth.js';
+import { hasStaffAccess } from '../utils/roles.js';
 
 export function LandingPage() {
   const navigate = useNavigate();
@@ -15,8 +16,7 @@ export function LandingPage() {
   // اگر کاربر لاگین شده باشد، به صفحه مناسب redirect کن
   useEffect(() => {
     if (isAuthenticated) {
-      const isAdmin = user?.username?.toLowerCase().startsWith('admin') || user?.username?.toLowerCase() === 'expert' || user?.role === 'expert';
-      if (isAdmin) {
+      if (hasStaffAccess(user)) {
         navigate('/admin/uploads', { replace: true });
       } else {
         navigate('/invoices', { replace: true });

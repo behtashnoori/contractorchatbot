@@ -10,11 +10,12 @@ import { Link as RouterLink, useLocation } from 'react-router-dom';
 import DescriptionIcon from '@mui/icons-material/Description';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useAuth } from '../hooks/useAuth.js';
+import { hasStaffAccess } from '../utils/roles.js';
 
 export function AppLayout({ title, actions, children }) {
   const location = useLocation();
   const { contractor, logout, user } = useAuth();
-  const isAdmin = user?.username?.toLowerCase().startsWith('admin') || user?.username?.toLowerCase() === 'expert';
+  const staffNav = hasStaffAccess(user);
 
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', color: 'text.primary', direction: 'rtl' }}>
@@ -48,7 +49,7 @@ export function AppLayout({ title, actions, children }) {
                 مدیریت فاکتورهای پیمانکاران
               </Typography>
             </Box>
-            {isAdmin && (
+            {staffNav && (
               <Box sx={{ display: 'flex', gap: 1, mr: 2 }}>
                 <Button
                   component={RouterLink}
@@ -76,7 +77,7 @@ export function AppLayout({ title, actions, children }) {
                   {contractor.supplier_code ? `کد تامین‌کننده: ${contractor.supplier_code}` : ''} {contractor.detail_code ? `(${contractor.detail_code})` : ''}
                 </Typography>
               </Box>
-            ) : isAdmin ? (
+            ) : staffNav ? (
               <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
                 <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.95rem' }}>
                   کارشناس بازرگانی

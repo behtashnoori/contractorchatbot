@@ -37,9 +37,10 @@ instance/
 *.sqlite
 *.sqlite3
 
-# IDEs
+# IDEs / agent tools
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
@@ -79,7 +80,7 @@ uploads/
 .env
 .env.local
 .env.*.local
-!.env.production
+.env.production
 
 # Coverage reports
 htmlcov/

@@ -6,6 +6,12 @@ from __future__ import annotations
 
 import uuid
 
+from flask_jwt_extended import get_jwt_identity
+
+from ..extensions import db
+from ..models import User
+from .api_errors import error_response
+
 
 def resolve_user_id(identity) -> uuid.UUID | None:
     """
@@ -39,6 +45,61 @@ def user_has_staff_access(user) -> bool:
         return False
     role = getattr(user, "role", None) or "contractor"
     return role in ("staff", "admin")
+
+
+def get_jwt_subject_uuid() -> uuid.UUID | None:
+    """UUID from the current JWT ``sub`` (identity), or None if missing or unparsable."""
+    return resolve_user_id(get_jwt_identity())
+
+
+def get_current_user() -> User | None:
+    """
+    Load the User row for the current JWT subject.
+
+    Returns None if the identity cannot be parsed to a UUID, or if no matching user exists.
+    Prefer :func:`load_authenticated_user` when you must distinguish invalid token vs missing user.
+    """
+    uid = get_jwt_subject_uuid()
+    if not uid:
+        return None
+    return db.session.get(User, uid)
+
+
+def load_authenticated_user() -> tuple[User | None, tuple | None]:
+    """
+    After ``@jwt_required()``: resolve JWT subject to a User.
+
+    Returns ``(user, None)`` on success, or ``(None, error_tuple)`` on failure
+    (same shape as :func:`~.api_errors.error_response`: JSON body + status).
+
+    - ``401`` ``invalid_token``: identity missing or not a UUID
+    - ``404`` ``not_found``: UUID valid but no user row
+    """
+    uid = get_jwt_subject_uuid()
+    if uid is None:
+        return None, error_response(
+            401,
+            "invalid_token",
+            "Invalid or missing user id in token.",
+        )
+    user = db.session.get(User, uid)
+    if user is None:
+        return None, error_response(404, "not_found", "User not found.")
+    return user, None
+
+
+def require_staff_user() -> tuple[User | None, tuple | None]:
+    """
+    Same as :func:`load_authenticated_user`, then require staff or admin role.
+
+    On missing staff access returns ``403`` ``forbidden`` (user row exists).
+    """
+    user, err = load_authenticated_user()
+    if err is not None:
+        return None, err
+    if not user_has_staff_access(user):
+        return None, error_response(403, "forbidden", "Staff or admin role required.")
+    return user, None
 
 
 def generate_username_variants(username: str) -> list[str]:

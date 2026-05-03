@@ -6,6 +6,8 @@ import Button from '@mui/material/Button';
 import Alert from '@mui/material/Alert';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
+const isDev = import.meta.env.DEV;
+
 export class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -17,13 +19,16 @@ export class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
-    // Log to console for debugging
-    console.error('Error details:', {
-      message: error?.message,
-      stack: error?.stack,
-      componentStack: errorInfo?.componentStack,
-    });
+    if (isDev) {
+      console.error('ErrorBoundary caught an error:', error, errorInfo);
+      console.error('Error details:', {
+        message: error?.message,
+        stack: error?.stack,
+        componentStack: errorInfo?.componentStack,
+      });
+    } else {
+      console.error('Application error');
+    }
     this.setState({
       error,
       errorInfo,
@@ -55,24 +60,28 @@ export class ErrorBoundary extends React.Component {
                 خطایی رخ داد
               </Typography>
               <Typography variant="body2" sx={{ mb: 2 }}>
-                {this.state.error?.message || 'یک خطای غیرمنتظره رخ داد'}
+                {isDev && this.state.error?.message
+                  ? this.state.error.message
+                  : 'یک خطای غیرمنتظره رخ داد. لطفاً صفحه را بارگذاری مجدد کنید.'}
               </Typography>
-              <Box
-                component="pre"
-                sx={{
-                  mt: 2,
-                  p: 2,
-                  bgcolor: 'background.paper',
-                  borderRadius: 1,
-                  fontSize: '0.75rem',
-                  overflow: 'auto',
-                  maxHeight: 200,
-                  direction: 'ltr',
-                  textAlign: 'left',
-                }}
-              >
-                {this.state.error?.stack || 'No stack trace available'}
-              </Box>
+              {isDev && (
+                <Box
+                  component="pre"
+                  sx={{
+                    mt: 2,
+                    p: 2,
+                    bgcolor: 'background.paper',
+                    borderRadius: 1,
+                    fontSize: '0.75rem',
+                    overflow: 'auto',
+                    maxHeight: 200,
+                    direction: 'ltr',
+                    textAlign: 'left',
+                  }}
+                >
+                  {this.state.error?.stack || 'No stack trace available'}
+                </Box>
+              )}
             </Alert>
             <Button variant="contained" onClick={this.handleReset} fullWidth sx={{ mt: 2 }}>
               بارگذاری مجدد صفحه
@@ -89,4 +98,3 @@ export class ErrorBoundary extends React.Component {
 ErrorBoundary.propTypes = {
   children: PropTypes.node.isRequired,
 };
-

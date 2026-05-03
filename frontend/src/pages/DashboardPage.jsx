@@ -15,6 +15,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import PendingIcon from '@mui/icons-material/Pending';
 import { fetchInvoices, fetchFilterOptions } from '../api/invoices.js';
 import { useAuth } from '../hooks/useAuth.js';
+import { hasStaffAccess } from '../utils/roles.js';
 import { AppLayout } from '../components/AppLayout.jsx';
 import { SummaryCard } from '../components/SummaryCard.jsx';
 import { FiltersBar } from '../components/FiltersBar.jsx';
@@ -46,7 +47,7 @@ const filtersFromSearchParams = (searchParams) => {
 export function DashboardPage() {
   const { contractor, user } = useAuth();
   const navigate = useNavigate();
-  const isAdmin = user?.username?.toLowerCase().startsWith('admin') || user?.username?.toLowerCase() === 'expert' || user?.role === 'expert';
+  const staffDashboard = hasStaffAccess(user);
   const [searchParams, setSearchParams] = useSearchParams();
   const [filters, setFilters] = useState(() => filtersFromSearchParams(searchParams));
   const [page, setPage] = useState(Number(searchParams.get('page') || 1));
@@ -140,7 +141,7 @@ export function DashboardPage() {
 
   return (
     <AppLayout
-      title={isAdmin ? "داشبورد مدیریت فاکتورها" : "داشبورد فاکتورها"}
+      title={staffDashboard ? "داشبورد مدیریت فاکتورها" : "داشبورد فاکتورها"}
       actions={
         <Box>
           <CircularProgress size={24} sx={{ visibility: isLoading ? 'visible' : 'hidden' }} />

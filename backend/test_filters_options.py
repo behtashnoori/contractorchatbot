@@ -1,6 +1,8 @@
 """
-Test script for filters/options endpoint
+Test script for filters/options endpoint.
+Set TEST_LOGIN_USERNAME and TEST_LOGIN_PASSWORD in the environment.
 """
+import os
 import requests
 import json
 import sys
@@ -9,14 +11,15 @@ import io
 # Fix encoding for Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-BASE_URL = "http://localhost:8000"
-
-# First, login to get a token
-# Try different contractors to find the one being tested
+BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost:8000")
 login_data = {
-    "username": "70358",
-    "password": "70358@2024"
+    "username": os.environ.get("TEST_LOGIN_USERNAME", ""),
+    "password": os.environ.get("TEST_LOGIN_PASSWORD", ""),
 }
+
+if not login_data["username"] or not login_data["password"]:
+    print("Set TEST_LOGIN_USERNAME and TEST_LOGIN_PASSWORD, then re-run.")
+    sys.exit(1)
 
 print("Logging in...")
 login_response = requests.post(f"{BASE_URL}/auth/login", json=login_data)

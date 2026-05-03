@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
 import pandas as pd
 from werkzeug.datastructures import FileStorage
 
@@ -11,6 +13,8 @@ from .import_utils import (
     normalize_str,
     row_payload_from_series,
 )
+
+logger = logging.getLogger(__name__)
 
 EXPECTED_COLUMNS = [
     "کد تامین کننده",
@@ -45,11 +49,13 @@ class CodTafsiltaminImporter:
         self._validate_headers(dataframe)
 
         # Delete all existing data before importing new data
-        print(f"[CodTafsiltaminImporter] Deleting existing data...")
-        
+        logger.info("codtafsiltamin import: clearing existing contractor directory data")
+
         # First, delete all Contractor records (they may have dependent records, but FK is nullable)
         deleted_contractors = db.session.query(Contractor).delete()
-        print(f"[CodTafsiltaminImporter] Deleted {deleted_contractors} existing Contractor records")
+        logger.info(
+            "codtafsiltamin import: deleted %s contractor rows", deleted_contractors
+        )
         
         # Then delete ImportError records for codtafsiltamin batches (excluding current batch)
         codtafsiltamin_batch_ids = [
@@ -58,14 +64,19 @@ class CodTafsiltaminImporter:
         ]
         if codtafsiltamin_batch_ids:
             deleted_errors = ImportError.query.filter(ImportError.batch_id.in_(codtafsiltamin_batch_ids)).delete()
-            print(f"[CodTafsiltaminImporter] Deleted {deleted_errors} ImportError records")
+            logger.info(
+                "codtafsiltamin import: deleted %s import_error rows", deleted_errors
+            )
         
         # Finally delete ImportBatch records (excluding current batch)
         deleted_batches = ImportBatch.query.filter(
             ImportBatch.source == "codtafsiltamin",
             ImportBatch.id != self.batch.id  # Exclude current batch
         ).delete()
-        print(f"[CodTafsiltaminImporter] Deleted {deleted_batches} ImportBatch records")
+        logger.info(
+            "codtafsiltamin import: deleted %s prior codtafsiltamin batch rows",
+            deleted_batches,
+        )
         
         db.session.commit()
 

@@ -11,7 +11,7 @@ sys.path.insert(0, str(project_root))
 from app import create_app
 from app.extensions import db
 from app.models import User, Contractor
-from app.utils.auth_utils import generate_username_variants, generate_username, generate_password
+from app.utils.auth_utils import generate_username_variants, generate_username
 
 app = create_app()
 
@@ -33,7 +33,6 @@ def check_user():
                 if user.contractor:
                     print(f"     Contractor: detail_code='{user.contractor.detail_code}', supplier_code='{user.contractor.supplier_code}'")
                     print(f"     Expected username: '{generate_username(user.contractor)}'")
-                    print(f"     Expected password: '{generate_password(user.contractor)}'")
         
         if not found_users:
             print("   ✗ No user found with any variant")
@@ -50,7 +49,6 @@ def check_user():
             for contractor in contractors:
                 print(f"     - detail_code: '{contractor.detail_code}', supplier_code: '{contractor.supplier_code}'")
                 print(f"       Expected username: '{generate_username(contractor)}'")
-                print(f"       Expected password: '{generate_password(contractor)}'")
                 
                 # Check if user exists for this contractor
                 user = User.query.filter_by(contractor_id=contractor.id).first()
@@ -87,7 +85,6 @@ def check_user():
                 if user.contractor:
                     print(f"     Contractor: detail_code='{user.contractor.detail_code}', supplier_code='{user.contractor.supplier_code}'")
                     print(f"     Expected username: '{generate_username(user.contractor)}'")
-                    print(f"     Expected password: '{generate_password(user.contractor)}'")
                 break
 
 if __name__ == "__main__":

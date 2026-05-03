@@ -8,15 +8,28 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from flask import Blueprint, jsonify, request, send_file
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask import Blueprint, g, jsonify, request, send_file
 
 from uuid import UUID
 
+from ..constants.import_status import (
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_PENDING,
+    STATUS_PROCESSING,
+    TERMINAL_STATUSES,
+)
 from ..extensions import db
 from ..models import Contractor, ImportBatch, ImportError, User, InvoiceSummary, InvoiceDetail
 from ..services.codtafsiltamin_importer import CodTafsiltaminImporter
-from ..utils.auth_utils import generate_username, generate_password, resolve_user_id, user_has_staff_access
+from ..utils.api_errors import error_response
+from ..utils.auth_decorators import require_staff
+from ..utils.auth_utils import generate_password, generate_username
+from ..services.audit_log import (
+    ACTION_IMPORT_UPLOAD,
+    ENTITY_IMPORT_BATCH,
+    record_audit,
+)
 from ..services.contractors_one_importer import ContractorsOneImporter
 from ..services.contractors_two_importer import ContractorsTwoImporter
 from ..services.template_generator import (
@@ -49,10 +62,15 @@ def _process_file_background(batch_id: UUID, file_path: Path, source: str):
         try:
             # Refresh batch to ensure we have the latest schema
             db.session.refresh(batch)
-            
-            batch.status = "processing"
+
+            batch.status = STATUS_PROCESSING
             db.session.commit()
-            
+            logger.info(
+                "Import batch %s lifecycle: processing source=%s",
+                batch_id,
+                source,
+            )
+
             # Open saved file
             with open(file_path, 'rb') as f:
                 from werkzeug.datastructures import FileStorage
@@ -82,33 +100,50 @@ def _process_file_background(batch_id: UUID, file_path: Path, source: str):
                 
                 # Refresh batch to get latest state
                 db.session.refresh(batch)
-                
-                batch.status = "completed_with_errors" if result.errors else "completed"
+
+                batch.status = STATUS_DONE
 
                 # Update metrics
                 batch.update_metrics(result.inserted, result.updated, result.errors)
                 logger.info(
-                    "Completed %s import: inserted=%s updated=%s errors=%s status=%s",
+                    "Import batch %s lifecycle: done source=%s inserted=%s updated=%s errors=%s",
+                    batch_id,
                     source,
                     result.inserted,
                     result.updated,
                     result.errors,
-                    batch.status,
                 )
-                
+
         except ValueError as exc:
-            logger.exception("ValueError in %s import", source)
-            db.session.refresh(batch)
-            batch.status = "failed"
-            batch.notes = str(exc)
-            db.session.commit()
-        except Exception as exc:
-            logger.exception("Exception in %s import", source)
+            error_id = str(uuid.uuid4())
+            logger.exception("ValueError in %s import [%s]", source, error_id)
             db.session.rollback()
-            db.session.refresh(batch)
-            batch.status = "failed"
-            batch.notes = str(exc)
-            db.session.commit()
+            batch = ImportBatch.query.get(batch_id)
+            if batch:
+                batch.status = STATUS_FAILED
+                batch.notes = f"failed ({error_id})"
+                db.session.commit()
+                logger.info(
+                    "Import batch %s lifecycle: failed source=%s error_id=%s",
+                    batch_id,
+                    source,
+                    error_id,
+                )
+        except Exception as exc:
+            error_id = str(uuid.uuid4())
+            logger.exception("Exception in %s import [%s]", source, error_id)
+            db.session.rollback()
+            batch = ImportBatch.query.get(batch_id)
+            if batch:
+                batch.status = STATUS_FAILED
+                batch.notes = f"failed ({error_id})"
+                db.session.commit()
+                logger.info(
+                    "Import batch %s lifecycle: failed source=%s error_id=%s",
+                    batch_id,
+                    source,
+                    error_id,
+                )
         finally:
             # Clean up temporary file
             try:
@@ -118,76 +153,110 @@ def _process_file_background(batch_id: UUID, file_path: Path, source: str):
                 pass
 
 
-def _get_current_user():
-    """Get current user from JWT identity, handling UUID conversion."""
-    identity = get_jwt_identity()
-    uid = resolve_user_id(identity)
-    if not uid:
-        return None
-    return db.session.get(User, uid)
-
-
 @admin_bp.post("/uploads")
-@jwt_required()
+@require_staff
 def upload_batch():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     files = request.files
     if not files:
-        return jsonify({"error": "no_files"}), 400
+        return error_response(400, "no_files", "No files were uploaded.")
 
-    # TODO: integrate with importer service
-    batch = ImportBatch(name="manual-upload", source="manual", status="pending")
-    batch.uploaded_by = current_user.username if current_user else None
-
-    from ..extensions import db
+    # Placeholder batch (no file ingest on this path; use specific upload endpoints).
+    batch = ImportBatch(name="manual-upload", source="manual", status=STATUS_PENDING)
+    batch.uploaded_by = g.current_user.username
 
     db.session.add(batch)
+    db.session.flush()
+    record_audit(g.current_user.id, ACTION_IMPORT_UPLOAD, ENTITY_IMPORT_BATCH, batch.id.hex)
     db.session.commit()
 
     return jsonify({"batch_id": batch.id.hex, "status": batch.status}), 202
 
 
 @admin_bp.post("/uploads/codtafsiltamin")
-@jwt_required()
+@require_staff
 def upload_codtafsiltamin():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     file = request.files.get("file")
     if not file:
-        return jsonify({"error": "file_required"}), 400
+        return error_response(
+            400,
+            "file_required",
+            "Multipart file field 'file' is required.",
+        )
 
     batch = ImportBatch(
         name=f"codtafsiltamin-{datetime.utcnow():%Y%m%d%H%M%S}",
         source="codtafsiltamin",
-        status="processing",
-        uploaded_by=current_user.username if current_user else None,
+        status=STATUS_PENDING,
+        uploaded_by=g.current_user.username,
     )
     db.session.add(batch)
     db.session.flush()
+    record_audit(g.current_user.id, ACTION_IMPORT_UPLOAD, ENTITY_IMPORT_BATCH, batch.id.hex)
+    db.session.commit()
+
+    batch.status = STATUS_PROCESSING
+    db.session.commit()
+    logger.info(
+        "Import batch %s lifecycle: processing source=codtafsiltamin",
+        batch.id,
+    )
 
     importer = CodTafsiltaminImporter(batch)
     try:
         result = importer.run(file)
-    except ValueError as exc:
-        batch.status = "failed"
+    except ValueError:
+        error_id = str(uuid.uuid4())
+        logger.exception("ValueError in codtafsiltamin upload [%s]", error_id)
         db.session.rollback()
-        db.session.commit()
-        logger.exception("ValueError in codtafsiltamin upload")
-        return jsonify({"error": "invalid_file", "message": str(exc)}), 400
-    except Exception as exc:
-        batch.status = "failed"
+        batch_row = db.session.get(ImportBatch, batch.id)
+        if batch_row:
+            batch_row.status = STATUS_FAILED
+            batch_row.notes = f"failed ({error_id})"
+            db.session.commit()
+            logger.info(
+                "Import batch %s lifecycle: failed source=codtafsiltamin error_id=%s",
+                batch.id,
+                error_id,
+            )
+        return error_response(
+            400,
+            "invalid_file",
+            "The file could not be processed.",
+            error_id=error_id,
+        )
+    except Exception:
+        error_id = str(uuid.uuid4())
+        logger.exception("Exception in codtafsiltamin upload [%s]", error_id)
         db.session.rollback()
-        db.session.commit()
-        logger.exception("Exception in codtafsiltamin upload")
-        return jsonify({"error": "processing_failed", "message": str(exc)}), 500
+        batch_row = db.session.get(ImportBatch, batch.id)
+        if batch_row:
+            batch_row.status = STATUS_FAILED
+            batch_row.notes = f"failed ({error_id})"
+            db.session.commit()
+            logger.info(
+                "Import batch %s lifecycle: failed source=codtafsiltamin error_id=%s",
+                batch.id,
+                error_id,
+            )
+        return error_response(
+            500,
+            "internal_error",
+            "An unexpected error occurred",
+            error_id=error_id,
+        )
 
-    batch.status = "completed_with_errors" if result.errors else "completed"
+    batch.status = STATUS_DONE
+    batch.inserted_count = result.inserted
+    batch.updated_count = result.updated
+    batch.errors_count = result.errors
     db.session.commit()
+    logger.info(
+        "Import batch %s lifecycle: done source=codtafsiltamin inserted=%s updated=%s errors=%s",
+        batch.id,
+        result.inserted,
+        result.updated,
+        result.errors,
+    )
 
     # Count total unique contractors in database
     total_contractors = Contractor.query.count()
@@ -210,15 +279,15 @@ def upload_codtafsiltamin():
 
 
 @admin_bp.post("/uploads/contractors-1")
-@jwt_required()
+@require_staff
 def upload_contractors_one():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     file = request.files.get("file")
     if not file:
-        return jsonify({"error": "file_required"}), 400
+        return error_response(
+            400,
+            "file_required",
+            "Multipart file field 'file' is required.",
+        )
 
     try:
         # Save file to temporary location
@@ -235,18 +304,19 @@ def upload_contractors_one():
         batch = ImportBatch(
             name=f"contractors-1-{datetime.utcnow():%Y%m%d%H%M%S}",
             source="contractors-1",
-            status="queued",
-            uploaded_by=current_user.username if current_user else None,
+            status=STATUS_PENDING,
+            uploaded_by=g.current_user.username,
         )
         db.session.add(batch)
         db.session.flush()
+        record_audit(g.current_user.id, ACTION_IMPORT_UPLOAD, ENTITY_IMPORT_BATCH, batch.id.hex)
         db.session.commit()
 
         # Start background processing
         thread = threading.Thread(
             target=_process_file_background,
             args=(batch.id, file_path, "contractors-1"),
-            daemon=True
+            daemon=False
         )
         thread.start()
 
@@ -255,34 +325,40 @@ def upload_contractors_one():
             jsonify(
                 {
                     "batch_id": batch.id.hex,
-                    "status": "queued",
+                    "status": STATUS_PENDING,
                     "message": "File uploaded successfully. Processing in background.",
                 }
             ),
             202,
         )
-    except Exception as exc:
+    except Exception:
         db.session.rollback()
-        logger.exception("contractors-1 upload failed")
-        return jsonify({"error": "processing_failed", "message": str(exc)}), 500
+        error_id = str(uuid.uuid4())
+        logger.exception("contractors-1 upload failed [%s]", error_id)
+        return error_response(
+            500,
+            "internal_error",
+            "An unexpected error occurred",
+            error_id=error_id,
+        )
 
 
 @admin_bp.get("/uploads/<batch_id>/progress")
-@jwt_required()
+@require_staff
 def get_upload_progress(batch_id):
     """Get progress of an upload batch"""
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-    
     try:
         batch_uuid = UUID(batch_id) if isinstance(batch_id, str) else batch_id
     except (ValueError, TypeError):
-        return jsonify({"error": "invalid_batch_id"}), 400
-    
+        return error_response(
+            400,
+            "invalid_batch_id",
+            "Batch id must be a valid UUID.",
+        )
+
     batch = ImportBatch.query.get(batch_uuid)
     if not batch:
-        return jsonify({"error": "not_found"}), 404
+        return error_response(404, "not_found", "Batch not found.")
     
     # Get metrics - use stored values if available, otherwise calculate
     # Always return metrics, even during processing
@@ -292,8 +368,8 @@ def get_upload_progress(batch_id):
         "errors": batch.errors_count or 0,
     }
     
-    # If metrics are zero but batch is completed, try to calculate from database
-    if batch.status in ("completed", "completed_with_errors", "failed"):
+    # If metrics are zero but batch is finished, try to calculate from database
+    if batch.status in TERMINAL_STATUSES:
         if metrics["inserted"] == 0 and metrics["updated"] == 0 and metrics["errors"] == 0:
             # Fallback: calculate from database
             if batch.source == "contractors-1":
@@ -310,6 +386,7 @@ def get_upload_progress(batch_id):
     return jsonify({
         "batch_id": batch.id.hex,
         "status": batch.status,
+        "terminal": batch.status in TERMINAL_STATUSES,
         "progress": {
             "percentage": batch.progress_percentage or 0.0,
             "processed": batch.rows_processed or 0,
@@ -320,15 +397,15 @@ def get_upload_progress(batch_id):
 
 
 @admin_bp.post("/uploads/contractors-2")
-@jwt_required()
+@require_staff
 def upload_contractors_two():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     file = request.files.get("file")
     if not file:
-        return jsonify({"error": "file_required"}), 400
+        return error_response(
+            400,
+            "file_required",
+            "Multipart file field 'file' is required.",
+        )
 
     try:
         # Save file to temporary location
@@ -345,18 +422,19 @@ def upload_contractors_two():
         batch = ImportBatch(
             name=f"contractors-2-{datetime.utcnow():%Y%m%d%H%M%S}",
             source="contractors-2",
-            status="queued",
-            uploaded_by=current_user.username if current_user else None,
+            status=STATUS_PENDING,
+            uploaded_by=g.current_user.username,
         )
         db.session.add(batch)
         db.session.flush()
+        record_audit(g.current_user.id, ACTION_IMPORT_UPLOAD, ENTITY_IMPORT_BATCH, batch.id.hex)
         db.session.commit()
 
         # Start background processing
         thread = threading.Thread(
             target=_process_file_background,
             args=(batch.id, file_path, "contractors-2"),
-            daemon=True
+            daemon=False
         )
         thread.start()
 
@@ -365,33 +443,39 @@ def upload_contractors_two():
             jsonify(
                 {
                     "batch_id": batch.id.hex,
-                    "status": "queued",
+                    "status": STATUS_PENDING,
                     "message": "File uploaded successfully. Processing in background.",
                 }
             ),
             202,
         )
-    except Exception as exc:
+    except Exception:
         db.session.rollback()
-        logger.exception("contractors-2 upload failed")
-        return jsonify({"error": "processing_failed", "message": str(exc)}), 500
+        error_id = str(uuid.uuid4())
+        logger.exception("contractors-2 upload failed [%s]", error_id)
+        return error_response(
+            500,
+            "internal_error",
+            "An unexpected error occurred",
+            error_id=error_id,
+        )
 
 
 @admin_bp.get("/uploads/<batch_id>")
-@jwt_required()
+@require_staff
 def batch_status(batch_id: str):
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     try:
         batch_uuid = UUID(batch_id)
     except ValueError:
-        return jsonify({"error": "invalid_batch_id"}), 400
+        return error_response(
+            400,
+            "invalid_batch_id",
+            "Batch id must be a valid UUID.",
+        )
 
     batch = ImportBatch.query.get(batch_uuid)
     if not batch:
-        return jsonify({"error": "not_found"}), 404
+        return error_response(404, "not_found", "Batch not found.")
 
     errors = [
         {
@@ -420,12 +504,8 @@ def batch_status(batch_id: str):
 
 
 @admin_bp.get("/templates/codtafsiltamin")
-@jwt_required()
+@require_staff
 def download_codtafsiltamin_template():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     template_file = generate_codtafsiltamin_template()
     return send_file(
         template_file,
@@ -436,12 +516,8 @@ def download_codtafsiltamin_template():
 
 
 @admin_bp.get("/templates/contractors-1")
-@jwt_required()
+@require_staff
 def download_contractors_one_template():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     template_file = generate_contractors_one_template()
     return send_file(
         template_file,
@@ -452,12 +528,8 @@ def download_contractors_one_template():
 
 
 @admin_bp.get("/templates/contractors-2")
-@jwt_required()
+@require_staff
 def download_contractors_two_template():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     template_file = generate_contractors_two_template()
     return send_file(
         template_file,
@@ -468,12 +540,8 @@ def download_contractors_two_template():
 
 
 @admin_bp.get("/contractors")
-@jwt_required()
+@require_staff
 def list_contractors():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", 20, type=int)
     search = request.args.get("search", "").strip()
@@ -517,33 +585,34 @@ def list_contractors():
 
 
 @admin_bp.post("/contractors/<contractor_id>/create-user")
-@jwt_required()
+@require_staff
 def create_contractor_user(contractor_id: str):
     """
     ایجاد کاربر برای یک contractor بر اساس detail_code و supplier_code.
     Username و password بر اساس کدها تولید می‌شوند و غیرقابل تغییر هستند.
     """
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     try:
         contractor_uuid = uuid.UUID(contractor_id)
     except ValueError:
-        return jsonify({"error": "invalid_contractor_id"}), 400
+        return error_response(
+            400,
+            "invalid_contractor_id",
+            "Contractor id must be a valid UUID.",
+        )
 
     contractor = Contractor.query.get(contractor_uuid)
     if not contractor:
-        return jsonify({"error": "contractor_not_found"}), 404
+        return error_response(404, "contractor_not_found", "Contractor not found.")
 
     # بررسی اینکه آیا کاربری از قبل وجود دارد
     existing_user = User.query.filter_by(contractor_id=contractor.id).first()
     if existing_user:
-        return jsonify({
-            "error": "user_exists",
-            "username": existing_user.username,
-            "message": "کاربری برای این پیمانکار از قبل وجود دارد."
-        }), 400
+        return error_response(
+            400,
+            "user_exists",
+            "کاربری برای این پیمانکار از قبل وجود دارد.",
+            extra={"username": existing_user.username},
+        )
 
     # تولید username و password
     username = generate_username(contractor)
@@ -551,10 +620,11 @@ def create_contractor_user(contractor_id: str):
 
     # بررسی اینکه username تکراری نباشد
     if User.query.filter_by(username=username).first():
-        return jsonify({
-            "error": "username_exists",
-            "message": f"نام کاربری '{username}' از قبل وجود دارد."
-        }), 400
+        return error_response(
+            400,
+            "username_exists",
+            f"نام کاربری '{username}' از قبل وجود دارد.",
+        )
 
     # ایجاد user
     user = User(
@@ -582,12 +652,8 @@ def create_contractor_user(contractor_id: str):
 
 
 @admin_bp.get("/invoice-summaries")
-@jwt_required()
+@require_staff
 def list_invoice_summaries():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", 20, type=int)
     search = request.args.get("search", "").strip()
@@ -643,12 +709,8 @@ def list_invoice_summaries():
 
 
 @admin_bp.get("/invoice-details")
-@jwt_required()
+@require_staff
 def list_invoice_details():
-    current_user = _get_current_user()
-    if not user_has_staff_access(current_user):
-        return jsonify({"error": "forbidden"}), 403
-
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", 20, type=int)
     search = request.args.get("search", "").strip()

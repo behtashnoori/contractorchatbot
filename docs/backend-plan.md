@@ -107,7 +107,7 @@ Indexes:
 ## Technology Stack
 
 - Flask + SQLAlchemy + Alembic for migrations.
-- PostgreSQL preferred (JSONB support); fallback SQLite for dev.
+- PostgreSQL (JSONB support); align local `DATABASE_URL` with this stack.
 - Celery (optional) for async imports if files become large; otherwise synchronous job with progress feedback.
 
 ## Outstanding Questions

@@ -31,6 +31,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 
 import { AppLayout } from '../components/AppLayout.jsx';
 import { useAuth } from '../hooks/useAuth.js';
+import { hasStaffAccess } from '../utils/roles.js';
 import {
   uploadCodTafsiltamin,
   uploadContractorsOne,
@@ -209,7 +210,7 @@ TabPanel.propTypes = {
 
 export function AdminUploadPage() {
   const { user } = useAuth();
-  const isAdmin = user?.username?.toLowerCase().startsWith('admin') || user?.username?.toLowerCase() === 'expert';
+  const staffUpload = hasStaffAccess(user);
 
   const [activeTab, setActiveTab] = useState(0);
   const [codFile, setCodFile] = useState(null);
@@ -263,11 +264,11 @@ export function AdminUploadPage() {
     mutationFn: uploadContractorsOne,
     onSuccess: async (data) => {
       console.log('[contractorsMutation] onSuccess called', data);
-      // If status is "queued", start polling for progress
-      if (data.status === 'queued' && data.batch_id) {
+      // If status is "pending", background worker has not finished yet — poll progress
+      if (data.status === 'pending' && data.batch_id) {
         console.log('[contractorsMutation] Starting polling for batch_id:', data.batch_id);
         setContractorsProgress({
-          status: 'queued',
+          status: 'pending',
           percentage: 0,
           processed: 0,
           total: 0,
@@ -304,8 +305,14 @@ export function AdminUploadPage() {
               metrics: progressData.metrics,
             });
             
-            // If completed, stop polling and fetch final results
-            if (progressData.status === 'completed' || progressData.status === 'completed_with_errors' || progressData.status === 'failed') {
+            // Terminal import states: done, failed (and legacy completed* for older backends)
+            const importTerminal =
+              progressData.terminal === true ||
+              progressData.status === 'done' ||
+              progressData.status === 'failed' ||
+              progressData.status === 'completed' ||
+              progressData.status === 'completed_with_errors';
+            if (importTerminal) {
               console.log('[pollProgress] Processing completed! Status:', progressData.status);
               isPolling = false;
               if (timeoutId) {
@@ -474,10 +481,10 @@ export function AdminUploadPage() {
   const contractorsTwoMutation = useMutation({
     mutationFn: uploadContractorsTwo,
     onSuccess: async (data) => {
-      // If status is "queued", start polling for progress
-      if (data.status === 'queued' && data.batch_id) {
+      // If status is "pending", background worker has not finished yet — poll progress
+      if (data.status === 'pending' && data.batch_id) {
         setContractorsTwoProgress({
-          status: 'queued',
+          status: 'pending',
           percentage: 0,
           processed: 0,
           total: 0,
@@ -506,8 +513,13 @@ export function AdminUploadPage() {
               metrics: progressData.metrics,
             });
             
-            // If completed, stop polling and fetch final results
-            if (progressData.status === 'completed' || progressData.status === 'completed_with_errors' || progressData.status === 'failed') {
+            const importTerminal =
+              progressData.terminal === true ||
+              progressData.status === 'done' ||
+              progressData.status === 'failed' ||
+              progressData.status === 'completed' ||
+              progressData.status === 'completed_with_errors';
+            if (importTerminal) {
               isPolling = false;
               if (timeoutId) {
                 clearTimeout(timeoutId);
@@ -694,7 +706,7 @@ export function AdminUploadPage() {
     enabled: activeTab === 2, // Only fetch when contractors-2 tab is active
   });
 
-  if (!isAdmin) {
+  if (!staffUpload) {
     return <Navigate to="/" replace />;
   }
 
@@ -980,7 +992,7 @@ export function AdminUploadPage() {
                 {contractorsMutation.error?.response?.data?.message || 'خطایی رخ داد. لطفاً دوباره تلاش کنید.'}
               </Alert>
             ) : null}
-            {contractorsProgress && (contractorsProgress.status === 'queued' || contractorsProgress.status === 'processing') ? (
+            {contractorsProgress && (contractorsProgress.status === 'pending' || contractorsProgress.status === 'processing') ? (
               <Box sx={{ width: '100%' }}>
                 <Alert severity="info" sx={{ mb: 1 }}>
                   <Typography variant="body2" sx={{ mb: 1 }}>
@@ -1032,7 +1044,7 @@ export function AdminUploadPage() {
                 </Typography>
               </Alert>
             ) : null}
-            {contractorsProgress && contractorsProgress.metrics && (contractorsProgress.status === 'completed' || contractorsProgress.status === 'completed_with_errors') ? (
+            {contractorsProgress && contractorsProgress.metrics && (contractorsProgress.status === 'done' || contractorsProgress.status === 'completed' || contractorsProgress.status === 'completed_with_errors') ? (
               <Alert severity={contractorsProgress.metrics.errors > 0 ? 'warning' : 'success'}>
                 <Typography variant="body2" sx={{ mb: 1, fontWeight: 'bold' }}>
                   نتیجه نهایی:
@@ -1261,7 +1273,7 @@ export function AdminUploadPage() {
                 {contractorsTwoMutation.error?.response?.data?.message || 'خطایی رخ داد. لطفاً دوباره تلاش کنید.'}
               </Alert>
             ) : null}
-            {contractorsTwoProgress && (contractorsTwoProgress.status === 'queued' || contractorsTwoProgress.status === 'processing') ? (
+            {contractorsTwoProgress && (contractorsTwoProgress.status === 'pending' || contractorsTwoProgress.status === 'processing') ? (
               <Box sx={{ width: '100%' }}>
                 <Alert severity="info" sx={{ mb: 1 }}>
                   <Typography variant="body2" sx={{ mb: 1 }}>
@@ -1313,7 +1325,7 @@ export function AdminUploadPage() {
                 </Typography>
               </Alert>
             ) : null}
-            {contractorsTwoProgress && contractorsTwoProgress.metrics && (contractorsTwoProgress.status === 'completed' || contractorsTwoProgress.status === 'completed_with_errors') ? (
+            {contractorsTwoProgress && contractorsTwoProgress.metrics && (contractorsTwoProgress.status === 'done' || contractorsTwoProgress.status === 'completed' || contractorsTwoProgress.status === 'completed_with_errors') ? (
               <Alert severity={contractorsTwoProgress.metrics.errors > 0 ? 'warning' : 'success'}>
                 <Typography variant="body2" sx={{ mb: 1, fontWeight: 'bold' }}>
                   نتیجه نهایی:

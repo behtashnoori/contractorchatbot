@@ -3,14 +3,20 @@ from __future__ import annotations
 from decimal import Decimal
 from datetime import datetime, date
 
-from flask import Blueprint, jsonify, request
-from flask_jwt_extended import get_jwt_identity, jwt_required
+from flask import Blueprint, g, jsonify, request
 from sqlalchemy import distinct, or_, select
 from convertdate import persian
 
 from ..extensions import db
 from ..models import InvoiceDetail, InvoiceSummary, User
-from ..utils.auth_utils import resolve_user_id, user_has_staff_access
+from ..services.audit_log import (
+    ACTION_INVOICE_VIEW,
+    ENTITY_INVOICE_SUMMARY,
+    record_audit,
+)
+from ..utils.api_errors import error_response
+from ..utils.auth_decorators import require_jwt_user
+from ..utils.auth_utils import user_has_staff_access
 
 invoices_bp = Blueprint("invoices", __name__)
 
@@ -66,73 +72,122 @@ def _extract_supplier_invoice_numbers(description: str | None) -> list[str]:
     return sorted(list(set(invoice_numbers)))
 
 
-def _get_current_user() -> User | None:
-    identity = get_jwt_identity()
-    uid = resolve_user_id(identity)
-    if not uid:
+def _invoice_summary_base_query_for_user(user: User):
+    """
+    Staff: all invoice summaries. Contractor: scoped summaries (detail_code + optional cover fallback).
+    Returns None if the user is a contractor without a linked contractor row.
+    """
+    if user_has_staff_access(user):
+        return InvoiceSummary.query
+    if not user.contractor:
         return None
-    return db.session.get(User, uid)
+    contractor = user.contractor
+    conditions = []
+    detail_code_condition = InvoiceSummary.detail_code == contractor.detail_code
+    conditions.append(detail_code_condition)
+    if contractor.supplier_code:
+        matching_cover_numbers_subquery = select(distinct(InvoiceDetail.cover_number)).where(
+            (InvoiceDetail.supplier_code == contractor.supplier_code)
+            | (InvoiceDetail.supplier_code.is_(None))
+        ).scalar_subquery()
+        fallback_condition = (
+            InvoiceSummary.cover_number.in_(matching_cover_numbers_subquery)
+            & (InvoiceSummary.detail_code != contractor.detail_code)
+        )
+        conditions.append(fallback_condition)
+    if len(conditions) > 1:
+        query = InvoiceSummary.query.filter(or_(*conditions))
+    else:
+        query = InvoiceSummary.query.filter(conditions[0])
+    if contractor.supplier_code:
+        query = query.filter(
+            (InvoiceSummary.supplier_code == contractor.supplier_code)
+            | (InvoiceSummary.supplier_code.is_(None))
+        )
+    return query
+
+
+def _persian_fiscal_year_date_bounds(fiscal_year_int: int) -> tuple[date, date] | None:
+    """Gregorian (start, end) date range for Persian fiscal year ``fiscal_year_int``, or None if invalid."""
+    try:
+        g_year_start, g_month_start, g_day_start = persian.to_gregorian(fiscal_year_int, 1, 1)
+        try:
+            g_year_end, g_month_end, g_day_end = persian.to_gregorian(fiscal_year_int, 12, 30)
+        except (ValueError, OverflowError):
+            g_year_end, g_month_end, g_day_end = persian.to_gregorian(fiscal_year_int, 12, 29)
+        return (
+            date(g_year_start, g_month_start, g_day_start),
+            date(g_year_end, g_month_end, g_day_end),
+        )
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _fallback_summary_for_contractor_cover(
+    cover_number: str, contractor
+) -> InvoiceSummary | None:
+    """When primary detail_code-scoped summary is missing, resolve via detail rows + supplier scope."""
+    any_summary = InvoiceSummary.query.filter_by(cover_number=cover_number).first()
+    if not any_summary:
+        return None
+    test_details = InvoiceDetail.query.filter_by(cover_number=cover_number)
+    if contractor.supplier_code:
+        test_details = test_details.filter(
+            (InvoiceDetail.supplier_code == contractor.supplier_code)
+            | (InvoiceDetail.supplier_code.is_(None))
+        )
+    if not test_details.first():
+        return None
+    fallback_summary_query = InvoiceSummary.query.filter_by(cover_number=cover_number)
+    if contractor.supplier_code:
+        fallback_summary_query = fallback_summary_query.filter(
+            (InvoiceSummary.supplier_code == contractor.supplier_code)
+            | (InvoiceSummary.supplier_code.is_(None))
+        )
+    summary = fallback_summary_query.order_by(InvoiceSummary.updated_at.desc()).first()
+    if summary is None:
+        return InvoiceSummary.query.filter_by(cover_number=cover_number).order_by(
+            InvoiceSummary.updated_at.desc()
+        ).first()
+    return summary
+
+
+def _contractor_invoice_detail_scope(cover_number: str, contractor):
+    """Details query and summary for contractor-scoped invoice detail view."""
+    summary_query = InvoiceSummary.query.filter_by(
+        cover_number=cover_number, detail_code=contractor.detail_code
+    )
+    if contractor.supplier_code:
+        summary_query = summary_query.filter(
+            (InvoiceSummary.supplier_code == contractor.supplier_code)
+            | (InvoiceSummary.supplier_code.is_(None))
+        )
+    details_query = InvoiceDetail.query.filter_by(cover_number=cover_number)
+    if contractor.supplier_code:
+        details_query = details_query.filter(
+            (InvoiceDetail.supplier_code == contractor.supplier_code)
+            | (InvoiceDetail.supplier_code.is_(None))
+        )
+    summary = summary_query.order_by(InvoiceSummary.updated_at.desc()).first()
+    if summary is None:
+        summary = _fallback_summary_for_contractor_cover(cover_number, contractor)
+    return details_query, summary
 
 
 @invoices_bp.get("/")
-@jwt_required()
+@require_jwt_user
 def list_invoices():
-    user = _get_current_user()
-    if not user:
-        return jsonify({"error": "not_found"}), 404
+    user = g.current_user
 
-    is_staff = user_has_staff_access(user)
+    query = _invoice_summary_base_query_for_user(user)
+    if query is None:
+        return error_response(
+            404,
+            "not_found",
+            "No contractor linked to this account.",
+        )
 
-    if is_staff:
-        # کارشناس: همه فاکتورها را می‌بیند
-        query = InvoiceSummary.query
-    else:
-        # پیمانکار: فقط فاکتورهای خودش را می‌بیند
-        if not user.contractor:
-            return jsonify({"error": "not_found"}), 404
-        
-        contractor = user.contractor
-        
-        # استفاده از همان منطق fallback که در filters/options استفاده می‌شود
-        # ساخت query با استفاده از or_ برای ترکیب شرط‌ها
-        # شرط 1: detail_code match
-        # شرط 2: cover_number از InvoiceDetail (fallback)
-        conditions = []
-        
-        # شرط اصلی: detail_code برابر
-        detail_code_condition = InvoiceSummary.detail_code == contractor.detail_code
-        conditions.append(detail_code_condition)
-        
-        # Fallback: اگر supplier_code موجود است، cover_number های مربوط به این contractor از InvoiceDetail را هم در نظر می‌گیریم
-        # اما فقط summaries با cover_number در لیست که detail_code این contractor نیست (تا تکراری نشوند)
-        # بهینه‌سازی: استفاده از subquery به جای separate query
-        if contractor.supplier_code:
-            # استفاده از subquery برای بهینه‌سازی
-            matching_cover_numbers_subquery = select(distinct(InvoiceDetail.cover_number)).where(
-                (InvoiceDetail.supplier_code == contractor.supplier_code) |
-                (InvoiceDetail.supplier_code.is_(None))
-            ).scalar_subquery()
-            
-            # شرط fallback: cover_number در subquery است اما detail_code این contractor نیست
-            # (تا summaries با detail_code این contractor که قبلاً در شرط اصلی هستند، تکراری نشوند)
-            fallback_condition = (
-                InvoiceSummary.cover_number.in_(matching_cover_numbers_subquery) &
-                (InvoiceSummary.detail_code != contractor.detail_code)
-            )
-            conditions.append(fallback_condition)
-
-        # ترکیب شرط‌ها با or_
-        if len(conditions) > 1:
-            query = InvoiceSummary.query.filter(or_(*conditions))
-        else:
-            query = InvoiceSummary.query.filter(conditions[0])
-        
-        # اعمال فیلتر supplier_code (اگر موجود بود)
-        if contractor.supplier_code:
-            query = query.filter(
-                (InvoiceSummary.supplier_code == contractor.supplier_code) |
-                (InvoiceSummary.supplier_code.is_(None))
-            )
+    staff_access = user_has_staff_access(user)
 
     # فیلتر وضعیت: پشتیبانی از هم string و هم array
     status = request.args.getlist("status")
@@ -215,7 +270,7 @@ def list_invoices():
     if detail_codes:
         all_details_query = all_details_query.filter(InvoiceDetail.detail_code.in_(detail_codes))
     
-    if not is_staff and user.contractor and user.contractor.supplier_code:
+    if not staff_access and user.contractor and user.contractor.supplier_code:
         all_details_query = all_details_query.filter(
             (InvoiceDetail.supplier_code == user.contractor.supplier_code) |
             (InvoiceDetail.supplier_code.is_(None))
@@ -303,15 +358,12 @@ def list_invoices():
 
 
 @invoices_bp.get("/<cover_number>")
-@jwt_required()
+@require_jwt_user
 def invoice_detail(cover_number: str):
-    user = _get_current_user()
-    if not user:
-        return jsonify({"error": "not_found"}), 404
+    user = g.current_user
+    staff_access = user_has_staff_access(user)
 
-    is_staff = user_has_staff_access(user)
-
-    if is_staff:
+    if staff_access:
         # کارشناس: همه فاکتورها را می‌بیند
         summary_query = InvoiceSummary.query.filter_by(cover_number=cover_number)
         details_query = InvoiceDetail.query.filter_by(cover_number=cover_number)
@@ -319,65 +371,19 @@ def invoice_detail(cover_number: str):
     else:
         # پیمانکار: فقط فاکتورهای خودش را می‌بیند
         if not user.contractor:
-            return jsonify({"error": "not_found"}), 404
-        
-        contractor = user.contractor
+            return error_response(
+                404,
+                "not_found",
+                "No contractor linked to this account.",
+            )
 
-        # ابتدا سعی می‌کنیم با detail_code پیدا کنیم
-        summary_query = InvoiceSummary.query.filter_by(
-            cover_number=cover_number, detail_code=contractor.detail_code
-        )
-        if contractor.supplier_code:
-            summary_query = summary_query.filter(
-                (InvoiceSummary.supplier_code == contractor.supplier_code) |
-                (InvoiceSummary.supplier_code.is_(None))
-            )
-        
-        # برای پیمانکار: بر اساس cover_number فیلتر می‌کنیم
-        # detail_code ممکن است در InvoiceDetail set نشده باشد (اگر فایل 2 قبل از فایل 1 آپلود شده باشد)
-        # پس فقط بر اساس cover_number فیلتر می‌کنیم
-        details_query = InvoiceDetail.query.filter_by(cover_number=cover_number)
-        
-        # اگر supplier_code وجود دارد، فیلتر اضافه می‌کنیم
-        if contractor.supplier_code:
-            details_query = details_query.filter(
-                (InvoiceDetail.supplier_code == contractor.supplier_code) |
-                (InvoiceDetail.supplier_code.is_(None))
-            )
-        
-        # اگر summary پیدا نشد، بررسی می‌کنیم که آیا invoice با cover_number وجود دارد اما detail_code match نمی‌کند
-        # در این صورت، اگر InvoiceDetail با cover_number و supplier_code match پیدا کردیم، summary را بدون detail_code filter می‌گیریم
-        summary = summary_query.order_by(InvoiceSummary.updated_at.desc()).first()
-        if not summary:
-            # Check if any invoice with this cover_number exists
-            any_summary = InvoiceSummary.query.filter_by(cover_number=cover_number).first()
-            if any_summary:
-                # Check if InvoiceDetail exists with matching supplier_code
-                test_details = InvoiceDetail.query.filter_by(cover_number=cover_number)
-                if contractor.supplier_code:
-                    test_details = test_details.filter(
-                        (InvoiceDetail.supplier_code == contractor.supplier_code) |
-                        (InvoiceDetail.supplier_code.is_(None))
-                    )
-                matching_details = test_details.first()
-                
-                if matching_details:
-                    # Use summary without detail_code filter
-                    # اگر InvoiceDetail با supplier_code match کرد، summary را بدون فیلتر detail_code می‌گیریم
-                    fallback_summary_query = InvoiceSummary.query.filter_by(cover_number=cover_number)
-                    if contractor.supplier_code:
-                        fallback_summary_query = fallback_summary_query.filter(
-                            (InvoiceSummary.supplier_code == contractor.supplier_code) |
-                            (InvoiceSummary.supplier_code.is_(None))
-                        )
-                    summary = fallback_summary_query.order_by(InvoiceSummary.updated_at.desc()).first()
-                    if not summary:
-                        summary = InvoiceSummary.query.filter_by(cover_number=cover_number).order_by(
-                            InvoiceSummary.updated_at.desc()
-                        ).first()
+        contractor = user.contractor
+        details_query, summary = _contractor_invoice_detail_scope(cover_number, contractor)
 
     if not summary:
-        return jsonify({"error": "not_found"}), 404
+        return error_response(404, "not_found", "Invoice not found.")
+
+    record_audit(user.id, ACTION_INVOICE_VIEW, ENTITY_INVOICE_SUMMARY, summary.id.hex)
 
     detail_rows = []
     all_supplier_invoice_numbers = []
@@ -453,50 +459,20 @@ def invoice_detail(cover_number: str):
 
 
 @invoices_bp.get("/filters/options")
-@jwt_required()
+@require_jwt_user
 def get_filter_options():
     """
     دریافت لیست سال‌های مالی و وضعیت‌های موجود برای فیلتر
     """
-    user = _get_current_user()
-    if not user:
-        return jsonify({"error": "unauthorized"}), 401
+    user = g.current_user
 
-    is_staff = user_has_staff_access(user)
-
-    if is_staff:
-        base_query = InvoiceSummary.query
-    else:
-        if not user.contractor:
-            return jsonify({"error": "not_found"}), 404
-        contractor = user.contractor
-
-        conditions = []
-        detail_code_condition = InvoiceSummary.detail_code == contractor.detail_code
-        conditions.append(detail_code_condition)
-
-        if contractor.supplier_code:
-            matching_cover_numbers_subquery = select(distinct(InvoiceDetail.cover_number)).where(
-                (InvoiceDetail.supplier_code == contractor.supplier_code)
-                | (InvoiceDetail.supplier_code.is_(None))
-            ).scalar_subquery()
-
-            fallback_condition = (
-                InvoiceSummary.cover_number.in_(matching_cover_numbers_subquery)
-                & (InvoiceSummary.detail_code != contractor.detail_code)
-            )
-            conditions.append(fallback_condition)
-
-        if len(conditions) > 1:
-            base_query = InvoiceSummary.query.filter(or_(*conditions))
-        else:
-            base_query = InvoiceSummary.query.filter(conditions[0])
-
-        if contractor.supplier_code:
-            base_query = base_query.filter(
-                (InvoiceSummary.supplier_code == contractor.supplier_code)
-                | (InvoiceSummary.supplier_code.is_(None))
-            )
+    base_query = _invoice_summary_base_query_for_user(user)
+    if base_query is None:
+        return error_response(
+            404,
+            "not_found",
+            "No contractor linked to this account.",
+        )
 
     fiscal_year_filter = request.args.get("fiscal_year")
     status_filter = request.args.get("status")
@@ -504,24 +480,18 @@ def get_filter_options():
     fiscal_year_query = base_query
     if status_filter:
         fiscal_year_query = fiscal_year_query.filter(InvoiceSummary.invoice_status == status_filter)
-    
+
     # اگر فیلتر سال مالی موجود باشد، آن را اعمال می‌کنیم (برای نمایش سال‌های موجود در آن محدوده)
     if fiscal_year_filter:
         try:
             fiscal_year_int = int(fiscal_year_filter)
-            g_year_start, g_month_start, g_day_start = persian.to_gregorian(fiscal_year_int, 1, 1)
-            try:
-                g_year_end, g_month_end, g_day_end = persian.to_gregorian(fiscal_year_int, 12, 30)
-            except (ValueError, OverflowError):
-                g_year_end, g_month_end, g_day_end = persian.to_gregorian(fiscal_year_int, 12, 29)
-            
-            start_date = date(g_year_start, g_month_start, g_day_start)
-            end_date = date(g_year_end, g_month_end, g_day_end)
-            
-            fiscal_year_query = fiscal_year_query.filter(
-                InvoiceSummary.invoice_created_at >= start_date,
-                InvoiceSummary.invoice_created_at <= end_date
-            )
+            bounds = _persian_fiscal_year_date_bounds(fiscal_year_int)
+            if bounds:
+                start_date, end_date = bounds
+                fiscal_year_query = fiscal_year_query.filter(
+                    InvoiceSummary.invoice_created_at >= start_date,
+                    InvoiceSummary.invoice_created_at <= end_date,
+                )
         except (ValueError, TypeError, OverflowError):
             pass
     
@@ -543,27 +513,20 @@ def get_filter_options():
     if fiscal_year_filter:
         try:
             fiscal_year_int = int(fiscal_year_filter)
-            g_year_start, g_month_start, g_day_start = persian.to_gregorian(fiscal_year_int, 1, 1)
-            try:
-                g_year_end, g_month_end, g_day_end = persian.to_gregorian(fiscal_year_int, 12, 30)
-            except (ValueError, OverflowError):
-                g_year_end, g_month_end, g_day_end = persian.to_gregorian(fiscal_year_int, 12, 29)
-
-            start_date = date(g_year_start, g_month_start, g_day_start)
-            end_date = date(g_year_end, g_month_end, g_day_end)
-
-            start_datetime = datetime.combine(start_date, datetime.min.time())
-            end_datetime = datetime.combine(end_date, datetime.max.time())
-
-            status_query = status_query.filter(
-                or_(
-                    (InvoiceSummary.invoice_created_at >= start_date)
-                    & (InvoiceSummary.invoice_created_at <= end_date),
-                    (InvoiceSummary.invoice_created_at.is_(None))
-                    & (InvoiceSummary.created_at >= start_datetime)
-                    & (InvoiceSummary.created_at <= end_datetime),
+            bounds = _persian_fiscal_year_date_bounds(fiscal_year_int)
+            if bounds:
+                start_date, end_date = bounds
+                start_datetime = datetime.combine(start_date, datetime.min.time())
+                end_datetime = datetime.combine(end_date, datetime.max.time())
+                status_query = status_query.filter(
+                    or_(
+                        (InvoiceSummary.invoice_created_at >= start_date)
+                        & (InvoiceSummary.invoice_created_at <= end_date),
+                        (InvoiceSummary.invoice_created_at.is_(None))
+                        & (InvoiceSummary.created_at >= start_datetime)
+                        & (InvoiceSummary.created_at <= end_datetime),
+                    )
                 )
-            )
         except (ValueError, TypeError, OverflowError):
             pass
 

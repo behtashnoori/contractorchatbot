@@ -3,7 +3,7 @@
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+ and npm
-- PostgreSQL 15 (optional for production; SQLite works for local dev)
+- PostgreSQL 15 (required; use a local or remote instance and set `DATABASE_URL`)
 
 ### Backend (Flask)
 1. Create virtual environment:
@@ -13,18 +13,22 @@
    .\.venv\Scripts\activate
    pip install -r requirements.txt
    ```
-2. Copy environment template:
+2. Copy environment template and fill **required** variables (the backend exits on startup if any are missing, empty, or unsafe):
+
+   | Variable | Requirement |
+   |----------|-------------|
+   | `DATABASE_URL` | Non-empty PostgreSQL SQLAlchemy URL (`postgresql+psycopg://…`). |
+   | `SECRET_KEY` | Non-empty, at least 32 characters, not a known placeholder (e.g. not `change-me`). |
+   | `JWT_SECRET_KEY` | Same as `SECRET_KEY`; you may use `JWT_SECRET` instead as an alias. |
+   | `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed origins (at least one); used for CORS and error-handler origins. |
+
    ```powershell
    copy config.example.env .env
    ```
-   Populate with secrets:
-   ```
-   FLASK_APP=wsgi.py
-   FLASK_ENV=development
-   SECRET_KEY=change-me
-   JWT_SECRET_KEY=change-me-asap
-   DATABASE_URL=sqlite:///instance/app.db
-   ```
+
+   Replace the long example secrets in `.env` with strong random values (e.g. `python -c "import secrets; print(secrets.token_urlsafe(48))"`).
+
+   Production: set `FLASK_ENV=production` and `FLASK_DEBUG=0` (DEBUG must be off).
 3. Initialise database:
    ```powershell
    flask db init

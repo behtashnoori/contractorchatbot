@@ -19,22 +19,13 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const bootstrap = async () => {
-      console.log('[AuthProvider] Bootstrap started');
       const token = authStorage.getAccessToken();
-      console.log('[AuthProvider] Token exists:', !!token);
       if (!token) {
-        console.log('[AuthProvider] No token, setting loading to false');
         setAuthState((prev) => ({ ...prev, loading: false }));
         return;
       }
       try {
-        console.log('[AuthProvider] Fetching user data...');
         const data = await fetchMe();
-        console.log('[AuthProvider] User data fetched:', { 
-          hasUser: !!data.user, 
-          hasContractor: !!data.contractor,
-          username: data.user?.username 
-        });
         setAuthState({
           isAuthenticated: true,
           loading: false,
@@ -43,14 +34,8 @@ export function AuthProvider({ children }) {
           totals: data.totals,
           mustChangePassword: data.user?.must_change_password ?? false,
         });
-        console.log('[AuthProvider] Auth state updated, authenticated: true');
       } catch (error) {
-        console.error('[AuthProvider] Bootstrap auth error', error);
-        console.error('[AuthProvider] Error details:', {
-          message: error?.message,
-          response: error?.response?.data,
-          status: error?.response?.status,
-        });
+        console.error('[AuthProvider] Bootstrap auth failed');
         authStorage.clear();
         setAuthState({
           isAuthenticated: false,
@@ -69,12 +54,13 @@ export function AuthProvider({ children }) {
     const data = await loginApi(credentials);
     authStorage.setAccessToken(data.access_token);
     authStorage.setRefreshToken(data.refresh_token);
+    const profile = await fetchMe();
     setAuthState({
       isAuthenticated: true,
       loading: false,
-      user: { username: credentials.username },
-      contractor: data.contractor,
-      totals: null,
+      user: profile.user,
+      contractor: profile.contractor,
+      totals: profile.totals,
       mustChangePassword: !!data.must_change_password,
     });
     return data;

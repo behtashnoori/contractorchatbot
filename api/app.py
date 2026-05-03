@@ -1,12 +1,16 @@
 import csv
 import functools
+import hashlib
+import hmac
 import io
 import os
+import uuid
 from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
+from werkzeug.exceptions import HTTPException
 
 from .db import get_conn
 from .queries import fetch_kpi_yearly
@@ -18,6 +22,15 @@ def _expected_kpi_key() -> str:
 	return os.getenv("KPI_API_KEY", "").strip()
 
 
+def _api_key_digest(value: str) -> bytes:
+	return hashlib.sha256(value.encode("utf-8")).digest()
+
+
+def _api_key_matches(expected: str, offered: str) -> bool:
+	"""Constant-time comparison via fixed-length digests (handles variable-length secrets)."""
+	return hmac.compare_digest(_api_key_digest(expected), _api_key_digest(offered))
+
+
 def _kpi_key_authorized() -> bool:
 	expected = _expected_kpi_key()
 	if not expected:
@@ -27,12 +40,13 @@ def _kpi_key_authorized() -> bool:
 	if auth.lower().startswith("bearer "):
 		bearer = auth[7:].strip()
 	x_key = (request.headers.get("X-API-Key") or "").strip()
-	q_key = (request.args.get("api_key") or "").strip()
-	return bearer == expected or x_key == expected or q_key == expected
+	return (bearer and _api_key_matches(expected, bearer)) or (
+		x_key and _api_key_matches(expected, x_key)
+	)
 
 
 def require_kpi_api_key(view_func):
-	"""Require KPI_API_KEY via Bearer, X-API-Key, or (for GET /kpi only) api_key query."""
+	"""Require KPI_API_KEY via Authorization: Bearer or X-API-Key header."""
 
 	@functools.wraps(view_func)
 	def wrapped(*args, **kwargs):
@@ -48,6 +62,13 @@ def require_kpi_api_key(view_func):
 
 def create_app() -> Flask:
 	app = Flask(__name__)
+
+	if os.getenv("FLASK_ENV", "development") == "production":
+		kpi = _expected_kpi_key()
+		if not kpi:
+			raise RuntimeError(
+				"KPI_API_KEY must be set to a non-empty value in production."
+			)
 
 	@app.get("/api/health")
 	def health():
@@ -166,6 +187,45 @@ def create_app() -> Flask:
 				"year": year or "",
 			},
 		)
+
+	@app.errorhandler(Exception)
+	def handle_exception(exc):
+		if isinstance(exc, HTTPException):
+			code = exc.code or 500
+			if code >= 500:
+				error_id = str(uuid.uuid4())
+				app.logger.exception("HTTP exception [%s]", error_id)
+				return (
+					jsonify(
+						{
+							"error": "internal_error",
+							"message": "An unexpected error occurred",
+							"error_id": error_id,
+						}
+					),
+					code,
+				)
+			return jsonify({"error": "http_error", "message": exc.description}), code
+		error_id = str(uuid.uuid4())
+		app.logger.exception("Unhandled exception [%s]", error_id)
+		return (
+			jsonify(
+				{
+					"error": "internal_error",
+					"message": "An unexpected error occurred",
+					"error_id": error_id,
+				}
+			),
+			500,
+		)
+
+	@app.after_request
+	def _security_headers(response):
+		response.headers.setdefault(
+			"Content-Security-Policy",
+			"default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+		)
+		return response
 
 	return app
 
