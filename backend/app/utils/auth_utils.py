@@ -2,6 +2,44 @@
 Helper functions for authentication and user management.
 """
 
+from __future__ import annotations
+
+import uuid
+
+
+def resolve_user_id(identity) -> uuid.UUID | None:
+    """
+    Convert JWT identity (hex string or UUID) to a UUID for DB lookups.
+    Returns None if the value cannot be parsed.
+    """
+    if identity is None:
+        return None
+    if isinstance(identity, uuid.UUID):
+        return identity
+    if not isinstance(identity, str):
+        return None
+    s = identity.strip()
+    if not s:
+        return None
+    try:
+        return uuid.UUID(s)
+    except ValueError:
+        pass
+    if len(s) == 32:
+        try:
+            return uuid.UUID(hex=s)
+        except ValueError:
+            return None
+    return None
+
+
+def user_has_staff_access(user) -> bool:
+    """True if the user may access staff/admin API surfaces (invoices-wide, admin blueprint)."""
+    if user is None:
+        return False
+    role = getattr(user, "role", None) or "contractor"
+    return role in ("staff", "admin")
+
 
 def generate_username_variants(username: str) -> list[str]:
     """

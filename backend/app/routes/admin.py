@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import logging
 import os
 import threading
-import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -16,7 +16,7 @@ from uuid import UUID
 from ..extensions import db
 from ..models import Contractor, ImportBatch, ImportError, User, InvoiceSummary, InvoiceDetail
 from ..services.codtafsiltamin_importer import CodTafsiltaminImporter
-from ..utils.auth_utils import generate_username, generate_password
+from ..utils.auth_utils import generate_username, generate_password, resolve_user_id, user_has_staff_access
 from ..services.contractors_one_importer import ContractorsOneImporter
 from ..services.contractors_two_importer import ContractorsTwoImporter
 from ..services.template_generator import (
@@ -26,6 +26,7 @@ from ..services.template_generator import (
 )
 
 admin_bp = Blueprint("admin", __name__)
+logger = logging.getLogger(__name__)
 
 # Create uploads directory if it doesn't exist
 UPLOADS_DIR = Path(__file__).parent.parent.parent / "uploads"
@@ -41,17 +42,16 @@ def _process_file_background(batch_id: UUID, file_path: Path, source: str):
     with app.app_context():
         batch = ImportBatch.query.get(batch_id)
         if not batch:
-            print(f"[Background] ERROR: Batch {batch_id} not found!")
+            logger.error("Background import: batch %s not found", batch_id)
             return
-        
-        print(f"[Background] Starting {source} import for batch {batch_id}")
+
+        logger.info("Background starting %s import for batch %s", source, batch_id)
         try:
             # Refresh batch to ensure we have the latest schema
             db.session.refresh(batch)
             
             batch.status = "processing"
             db.session.commit()
-            print(f"[Background] Batch status set to 'processing'")
             
             # Open saved file
             with open(file_path, 'rb') as f:
@@ -71,41 +71,44 @@ def _process_file_background(batch_id: UUID, file_path: Path, source: str):
                 else:
                     raise ValueError(f"Unknown source: {source}")
                 
-                print(f"[Background] Running importer for {source}...")
+                logger.info("Running importer for %s", source)
                 result = importer.run(file_obj)
-                print(f"[Background] Importer completed. Result: inserted={result.inserted}, updated={result.updated}, errors={result.errors}")
+                logger.info(
+                    "Importer completed: inserted=%s updated=%s errors=%s",
+                    result.inserted,
+                    result.updated,
+                    result.errors,
+                )
                 
                 # Refresh batch to get latest state
                 db.session.refresh(batch)
                 
                 batch.status = "completed_with_errors" if result.errors else "completed"
-                print(f"[Background] Setting batch status to: {batch.status}")
-                
+
                 # Update metrics
                 batch.update_metrics(result.inserted, result.updated, result.errors)
-                print(f"[Background] Metrics updated. Final status: {batch.status}")
-                
-                print(f"[Background] Completed {source} import: {result.inserted} inserted, {result.updated} updated, {result.errors} errors")
+                logger.info(
+                    "Completed %s import: inserted=%s updated=%s errors=%s status=%s",
+                    source,
+                    result.inserted,
+                    result.updated,
+                    result.errors,
+                    batch.status,
+                )
                 
         except ValueError as exc:
-            print(f"[Background] ValueError in {source} import: {str(exc)}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("ValueError in %s import", source)
             db.session.refresh(batch)
             batch.status = "failed"
             batch.notes = str(exc)
             db.session.commit()
-            print(f"[Background] Batch status set to 'failed' due to ValueError")
         except Exception as exc:
-            print(f"[Background] Exception in {source} import: {str(exc)}")
-            import traceback
-            traceback.print_exc()
+            logger.exception("Exception in %s import", source)
             db.session.rollback()
             db.session.refresh(batch)
             batch.status = "failed"
             batch.notes = str(exc)
             db.session.commit()
-            print(f"[Background] Batch status set to 'failed' due to Exception")
         finally:
             # Clean up temporary file
             try:
@@ -118,23 +121,17 @@ def _process_file_background(batch_id: UUID, file_path: Path, source: str):
 def _get_current_user():
     """Get current user from JWT identity, handling UUID conversion."""
     identity = get_jwt_identity()
-    try:
-        user_id = uuid.UUID(identity) if isinstance(identity, str) else identity
-        return User.query.get(user_id)
-    except (ValueError, TypeError):
+    uid = resolve_user_id(identity)
+    if not uid:
         return None
-
-
-def _is_admin(user: User | None) -> bool:
-    # Placeholder for future role checks
-    return bool(user and (user.username.startswith("admin") or user.username == "expert"))
+    return db.session.get(User, uid)
 
 
 @admin_bp.post("/uploads")
 @jwt_required()
 def upload_batch():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     files = request.files
@@ -157,7 +154,7 @@ def upload_batch():
 @jwt_required()
 def upload_codtafsiltamin():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     file = request.files.get("file")
@@ -180,19 +177,14 @@ def upload_codtafsiltamin():
         batch.status = "failed"
         db.session.rollback()
         db.session.commit()
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"ValueError in codtafsiltamin upload: {str(exc)}")
-        print(f"Traceback: {error_details}")
+        logger.exception("ValueError in codtafsiltamin upload")
         return jsonify({"error": "invalid_file", "message": str(exc)}), 400
     except Exception as exc:
         batch.status = "failed"
         db.session.rollback()
         db.session.commit()
-        import traceback
-        error_msg = str(exc)
-        traceback.print_exc()
-        return jsonify({"error": "processing_failed", "message": error_msg}), 500
+        logger.exception("Exception in codtafsiltamin upload")
+        return jsonify({"error": "processing_failed", "message": str(exc)}), 500
 
     batch.status = "completed_with_errors" if result.errors else "completed"
     db.session.commit()
@@ -221,7 +213,7 @@ def upload_codtafsiltamin():
 @jwt_required()
 def upload_contractors_one():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     file = request.files.get("file")
@@ -271,7 +263,7 @@ def upload_contractors_one():
         )
     except Exception as exc:
         db.session.rollback()
-        traceback.print_exc()
+        logger.exception("contractors-1 upload failed")
         return jsonify({"error": "processing_failed", "message": str(exc)}), 500
 
 
@@ -280,7 +272,7 @@ def upload_contractors_one():
 def get_upload_progress(batch_id):
     """Get progress of an upload batch"""
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
     
     try:
@@ -331,7 +323,7 @@ def get_upload_progress(batch_id):
 @jwt_required()
 def upload_contractors_two():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     file = request.files.get("file")
@@ -381,7 +373,7 @@ def upload_contractors_two():
         )
     except Exception as exc:
         db.session.rollback()
-        traceback.print_exc()
+        logger.exception("contractors-2 upload failed")
         return jsonify({"error": "processing_failed", "message": str(exc)}), 500
 
 
@@ -389,7 +381,7 @@ def upload_contractors_two():
 @jwt_required()
 def batch_status(batch_id: str):
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     try:
@@ -431,7 +423,7 @@ def batch_status(batch_id: str):
 @jwt_required()
 def download_codtafsiltamin_template():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     template_file = generate_codtafsiltamin_template()
@@ -447,7 +439,7 @@ def download_codtafsiltamin_template():
 @jwt_required()
 def download_contractors_one_template():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     template_file = generate_contractors_one_template()
@@ -463,7 +455,7 @@ def download_contractors_one_template():
 @jwt_required()
 def download_contractors_two_template():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     template_file = generate_contractors_two_template()
@@ -479,7 +471,7 @@ def download_contractors_two_template():
 @jwt_required()
 def list_contractors():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     page = request.args.get("page", 1, type=int)
@@ -532,7 +524,7 @@ def create_contractor_user(contractor_id: str):
     Username و password بر اساس کدها تولید می‌شوند و غیرقابل تغییر هستند.
     """
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     try:
@@ -568,7 +560,8 @@ def create_contractor_user(contractor_id: str):
     user = User(
         username=username,
         contractor_id=contractor.id,
-        must_change_password=False  # غیرقابل تغییر
+        must_change_password=False,
+        role="contractor",
     )
     user.set_password(password)
     db.session.add(user)
@@ -592,7 +585,7 @@ def create_contractor_user(contractor_id: str):
 @jwt_required()
 def list_invoice_summaries():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     page = request.args.get("page", 1, type=int)
@@ -653,7 +646,7 @@ def list_invoice_summaries():
 @jwt_required()
 def list_invoice_details():
     current_user = _get_current_user()
-    if not _is_admin(current_user):
+    if not user_has_staff_access(current_user):
         return jsonify({"error": "forbidden"}), 403
 
     page = request.args.get("page", 1, type=int)

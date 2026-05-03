@@ -44,15 +44,29 @@ def get_or_create_contractor(detail_code: str, name: str) -> Contractor:
     return contractor
 
 
-def get_or_create_user(username: str, password: str, contractor: Contractor) -> User:
+def get_or_create_user(
+    username: str,
+    password: str,
+    contractor: Contractor,
+    *,
+    role: str = "contractor",
+) -> User:
     user = User.query.filter_by(username=username.lower()).first()
     if user:
         # ensure contractor/status linkage remains valid
         if not user.contractor_id:
             user.contractor_id = contractor.id
             db.session.commit()
+        if user.role != role:
+            user.role = role
+            db.session.commit()
         return user
-    user = User(username=username.lower(), contractor_id=contractor.id, must_change_password=False)
+    user = User(
+        username=username.lower(),
+        contractor_id=contractor.id,
+        must_change_password=False,
+        role=role,
+    )
     user.set_password(password)
     db.session.add(user)
     db.session.commit()
@@ -65,9 +79,9 @@ def main() -> None:
         demo_contractor = get_or_create_contractor("CNT-DEMO", "پیمانکار نمونه")
         admin_contractor = get_or_create_contractor("CNT-ADMIN", "واحد بازرگانی")
 
-        contractor_user = get_or_create_user("contractor", "password123", demo_contractor)
-        admin_user = get_or_create_user("admin1", "password123", admin_contractor)
-        expert_user = get_or_create_user("expert", "expert123", admin_contractor)
+        contractor_user = get_or_create_user("contractor", "password123", demo_contractor, role="contractor")
+        admin_user = get_or_create_user("admin1", "password123", admin_contractor, role="staff")
+        expert_user = get_or_create_user("expert", "expert123", admin_contractor, role="staff")
 
         print("== Demo seed complete ==")
         print(f"- Contractor user: username=contractor  password=password123  contractor={demo_contractor.detail_code}")

@@ -27,7 +27,6 @@ env/
 *.env
 !.env.example
 !config.example.env
-!production.env
 
 # Flask
 instance/

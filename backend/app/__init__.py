@@ -1,5 +1,5 @@
+import logging
 import os
-import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,114 +15,60 @@ from .routes.admin import admin_bp
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
-# Allowed CORS origins for development
-# Includes frontend ports 6902-6910 to handle automatic port selection
-ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-] + [f"http://localhost:{port}" for port in range(6902, 6911)] + [
-    f"http://127.0.0.1:{port}" for port in range(6902, 6911)
-]
 
-# Load additional allowed origins from environment variable (for production)
-# Format: comma-separated list of origins, e.g., "http://example.com,https://example.com"
-env_allowed_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
-if env_allowed_origins:
-    # Split by comma and strip whitespace
-    additional_origins = [origin.strip() for origin in env_allowed_origins.split(',') if origin.strip()]
-    ALLOWED_ORIGINS.extend(additional_origins)
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        if os.getenv("FLASK_ENV", "development") == "production":
+            return []
+        # Minimal local defaults when unset (development only)
+        return [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
-# Pattern for local network IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
-LOCAL_NETWORK_PATTERN = re.compile(
-    r'^http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}):(690[2-9]|6910)$'
-)
+
+ALLOWED_ORIGINS = _parse_cors_origins()
 
 
 def is_allowed_origin(origin):
-    """
-    Check if an origin is allowed for CORS.
-    - In development: allows localhost, 127.0.0.1, and local network IPs
-    - In production: only allows origins from ALLOWED_ORIGINS
-    - Also supports IP-based matching for mobile compatibility
-    """
+    """Allow only origins explicitly listed via CORS_ALLOWED_ORIGINS (or dev fallback)."""
     if not origin:
         return False
-    
-    # Always allow origins from ALLOWED_ORIGINS list (exact match)
-    if origin in ALLOWED_ORIGINS:
-        return True
-    
-    # IP-based matching for mobile compatibility
-    # Some mobile browsers might send origin with slightly different format
-    # Extract IP from origin
-    try:
-        if origin.startswith('http://') or origin.startswith('https://'):
-            origin_clean = origin.replace('http://', '').replace('https://', '')
-            origin_parts = origin_clean.split(':')
-            origin_ip = origin_parts[0] if origin_parts else None
-            
-            # Check if any allowed origin has the same IP
-            for allowed in ALLOWED_ORIGINS:
-                if allowed.startswith('http://') or allowed.startswith('https://'):
-                    allowed_clean = allowed.replace('http://', '').replace('https://', '')
-                    allowed_parts = allowed_clean.split(':')
-                    allowed_ip = allowed_parts[0] if allowed_parts else None
-                    
-                    # If IPs match, allow it (for mobile compatibility)
-                    if origin_ip and allowed_ip and origin_ip == allowed_ip:
-                        # Also check if ports match (if both have ports)
-                        origin_port = origin_parts[1] if len(origin_parts) > 1 else None
-                        allowed_port = allowed_parts[1] if len(allowed_parts) > 1 else None
-                        
-                        # If both have ports, they must match
-                        # If one doesn't have port, allow it (for flexibility)
-                        if not origin_port or not allowed_port or origin_port == allowed_port:
-                            return True
-    except Exception:
-        # If parsing fails, continue with other checks
-        pass
-    
-    # In development mode, also allow local network IPs
-    if os.getenv('FLASK_ENV', 'development') == 'development':
-        # Check if origin matches local network pattern
-        if LOCAL_NETWORK_PATTERN.match(origin):
-            return True
-    
-    return False
+    return origin in ALLOWED_ORIGINS
 
 
-def _get_debug_log_path():
-    """Get the path to debug.log file, creating directory if needed."""
-    try:
-        # Get project root (parent of backend directory)
-        project_root = Path(__file__).parent.parent.parent
-        debug_dir = project_root / ".cursor"
-        debug_dir.mkdir(parents=True, exist_ok=True)
-        return str(debug_dir / "debug.log")
-    except Exception:
-        # Fallback: use a temp location or return None
-        return None
-
-
-def _write_debug_log(log_data):
-    """Safely write to debug log file."""
-    try:
-        log_path = _get_debug_log_path()
-        if log_path:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(log_data + '\n')
-    except Exception:
-        # Silently fail - don't break the app if logging fails
-        pass
+def _configure_logging(app: Flask) -> None:
+    level_name = os.getenv("LOG_LEVEL", "DEBUG" if app.debug else "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root = logging.getLogger()
+    if not root.handlers:
+        logging.basicConfig(level=level)
+    root.setLevel(level)
+    app.logger.setLevel(level)
 
 
 def create_app(settings_override: dict | None = None) -> Flask:
     app = Flask(__name__)
 
-    # load base settings, then override with caller-provided values
     app.config.from_object(Settings())
     if settings_override:
         app.config.update(settings_override)
+
+    db_uri = (app.config.get("SQLALCHEMY_DATABASE_URI") or "").strip()
+    if not db_uri:
+        raise RuntimeError("DATABASE_URL must be set in the environment.")
+
+    if os.getenv("FLASK_ENV", "development") == "production":
+        if not ALLOWED_ORIGINS:
+            raise RuntimeError(
+                "CORS_ALLOWED_ORIGINS must be set to a comma-separated list in production."
+            )
+
+    _configure_logging(app)
 
     _init_extensions(app)
     _register_blueprints(app)
@@ -131,76 +77,81 @@ def create_app(settings_override: dict | None = None) -> Flask:
     @app.errorhandler(403)
     def handle_forbidden(e):
         from flask import request, jsonify
+
         response = jsonify({"error": "forbidden", "message": "Access forbidden"})
         response.status_code = 403
-        origin = request.headers.get('Origin')
+        origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
-            response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'
-            response.headers['Access-Control-Expose-Headers'] = 'Content-Type, Authorization'
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
+            )
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, X-Requested-With, Accept, Origin, "
+                "Access-Control-Request-Method, Access-Control-Request-Headers"
+            )
+            response.headers["Access-Control-Expose-Headers"] = (
+                "Content-Type, Authorization"
+            )
         return response
-    
-    # Error handler to ensure CORS headers on error responses
+
     @app.errorhandler(Exception)
     def handle_exception(e):
         from flask import jsonify, request
-        # #region agent log
-        import json
-        import time
-        import traceback
-        origin = request.headers.get('Origin', 'no-origin') if hasattr(request, 'headers') else 'no-origin'
-        error_trace = traceback.format_exc()
-        _write_debug_log(json.dumps({"id":"log_exception_handler","timestamp":int(time.time()*1000),"location":"__init__.py:handle_exception","message":"Exception caught in error handler","data":{"error":str(e),"origin":origin,"traceback":error_trace},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}))
-        # #endregion
-        
-        # Create error response
-        response = jsonify({"error": "internal_server_error", "message": str(e)})
-        response.status_code = 500
-        
-        # Add CORS headers to error response
-        if is_allowed_origin(origin):
-            response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'
-            response.headers['Access-Control-Expose-Headers'] = 'Content-Type, Authorization'
-        
+        from werkzeug.exceptions import HTTPException
+
+        origin = request.headers.get("Origin")
+
+        if isinstance(e, HTTPException):
+            response = jsonify(
+                {"error": "http_error", "message": e.description}
+            )
+            response.status_code = e.code
+        else:
+            app.logger.exception("Unhandled exception")
+            response = jsonify(
+                {
+                    "error": "internal_server_error",
+                    "message": "An unexpected error occurred",
+                }
+            )
+            response.status_code = 500
+
+        if origin and is_allowed_origin(origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
+            )
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, X-Requested-With, Accept, Origin, "
+                "Access-Control-Request-Method, Access-Control-Request-Headers"
+            )
+            response.headers["Access-Control-Expose-Headers"] = (
+                "Content-Type, Authorization"
+            )
         return response
 
-    # Add after_request handler to ensure CORS headers on all responses
-    # Flask-CORS should handle this automatically, but this ensures consistency
     @app.after_request
     def after_request(response):
-        # #region agent log
-        import json
-        import time
-        origin = __import__('flask').request.headers.get('Origin', 'no-origin')
-        cors_headers_before = {k: v for k, v in response.headers.items() if 'access-control' in k.lower()}
-        # #endregion
-        
-        # Manual CORS header injection as fallback
-        # Check if origin is allowed (handle None/empty cases)
-        origin_to_use = origin if origin and origin != 'no-origin' else None
-        if is_allowed_origin(origin_to_use):
-            # Add CORS headers if not already present
-            if 'Access-Control-Allow-Origin' not in response.headers:
-                response.headers['Access-Control-Allow-Origin'] = origin_to_use
-            if 'Access-Control-Allow-Methods' not in response.headers:
-                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
-            if 'Access-Control-Allow-Headers' not in response.headers:
-                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'
-            if 'Access-Control-Expose-Headers' not in response.headers:
-                response.headers['Access-Control-Expose-Headers'] = 'Content-Type, Authorization'
-        elif origin_to_use:
-            # Log if origin is not in allowed list (for debugging)
-            # #region agent log
-            _write_debug_log(json.dumps({"id":"log_origin_not_allowed","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"Origin not in allowed list","data":{"origin":origin_to_use,"allowed_origins":ALLOWED_ORIGINS},"sessionId":"debug-session","runId":"run1","hypothesisId":"D"}))
-            # #endregion
-        
-        # #region agent log
-        cors_headers_after = {k: v for k, v in response.headers.items() if 'access-control' in k.lower()}
-        _write_debug_log(json.dumps({"id":"log_after_request","timestamp":int(time.time()*1000),"location":"__init__.py:after_request","message":"After request handler","data":{"origin":origin,"status_code":response.status_code,"cors_headers_before":dict(cors_headers_before),"cors_headers_after":dict(cors_headers_after),"path":__import__('flask').request.path,"method":__import__('flask').request.method},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
-        # #endregion
+        from flask import request
+
+        origin = request.headers.get("Origin")
+        if origin and is_allowed_origin(origin):
+            if "Access-Control-Allow-Origin" not in response.headers:
+                response.headers["Access-Control-Allow-Origin"] = origin
+            if "Access-Control-Allow-Methods" not in response.headers:
+                response.headers["Access-Control-Allow-Methods"] = (
+                    "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
+                )
+            if "Access-Control-Allow-Headers" not in response.headers:
+                response.headers["Access-Control-Allow-Headers"] = (
+                    "Content-Type, Authorization, X-Requested-With, Accept, Origin, "
+                    "Access-Control-Request-Method, Access-Control-Request-Headers"
+                )
+            if "Access-Control-Expose-Headers" not in response.headers:
+                response.headers["Access-Control-Expose-Headers"] = (
+                    "Content-Type, Authorization"
+                )
         return response
 
     return app
@@ -211,19 +162,11 @@ def _init_extensions(app: Flask) -> None:
     migrate.init_app(app, db)
     jwt.init_app(app)
     bcrypt.init_app(app)
-    # CORS configuration - dynamic origin validation
-    # In development: allows localhost, 127.0.0.1, and local network IPs
-    # In production: only allows origins from ALLOWED_ORIGINS
-    # #region agent log
-    import json
-    import time
-    _write_debug_log(json.dumps({"id":"log_init_cors","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"Initializing CORS","data":{"mode":os.getenv('FLASK_ENV', 'development'),"allowed_origins":ALLOWED_ORIGINS},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
-    # #endregion
     cors.init_app(
         app,
         resources={
             r"/*": {
-                "origins": is_allowed_origin,  # Use function for dynamic validation
+                "origins": is_allowed_origin,
                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
                 "allow_headers": [
                     "Content-Type",
@@ -240,75 +183,42 @@ def _init_extensions(app: Flask) -> None:
             }
         },
     )
-    
-    # JWT error handlers to ensure CORS headers on auth errors
+
     @jwt.expired_token_loader
     def expired_token_callback(jwt_header, jwt_payload):
         from flask import request, jsonify
+
         response = jsonify({"error": "token_expired", "message": "Token has expired"})
         response.status_code = 401
-        origin = request.headers.get('Origin')
+        origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
-            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers["Access-Control-Allow-Origin"] = origin
         return response
-    
+
     @jwt.invalid_token_loader
     def invalid_token_callback(error):
         from flask import request, jsonify
+
         response = jsonify({"error": "invalid_token", "message": "Invalid token"})
         response.status_code = 401
-        origin = request.headers.get('Origin')
+        origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
-            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers["Access-Control-Allow-Origin"] = origin
         return response
-    
+
     @jwt.unauthorized_loader
     def unauthorized_callback(error):
         from flask import request, jsonify
+
         response = jsonify({"error": "unauthorized", "message": "Authorization required"})
         response.status_code = 401
-        origin = request.headers.get('Origin')
+        origin = request.headers.get("Origin")
         if is_allowed_origin(origin):
-            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers["Access-Control-Allow-Origin"] = origin
         return response
-    # #region agent log
-    _write_debug_log(json.dumps({"id":"log_cors_initialized","timestamp":int(time.time()*1000),"location":"__init__.py:_init_extensions","message":"CORS initialized","data":{},"sessionId":"debug-session","runId":"run1","hypothesisId":"A"}))
-    # #endregion
 
 
 def _register_blueprints(app: Flask) -> None:
     app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(invoices_bp, url_prefix="/invoices")
     app.register_blueprint(admin_bp, url_prefix="/admin")
-    
-    # #region agent log
-    @app.before_request
-    def before_request():
-        try:
-            import json
-            import time
-            origin = __import__('flask').request.headers.get('Origin', 'no-origin')
-            method = __import__('flask').request.method
-            path = __import__('flask').request.path
-            log_data = {"id":"log_before_request","timestamp":int(time.time()*1000),"location":"__init__.py:before_request","message":"Before request","data":{"origin":origin,"method":method,"path":path},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}
-            _write_debug_log(json.dumps(log_data))
-        except Exception as e:
-            # Fallback: try to log the error
-            try:
-                _write_debug_log(json.dumps({"id":"log_before_request_error","timestamp":int(time.time()*1000),"location":"__init__.py:before_request","message":"Logging error","data":{"error":str(e)},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}))
-            except:
-                pass
-    # #endregion
-    
-    # Explicit OPTIONS handler for CORS preflight (Flask-CORS should handle this, but ensure it works)
-    @app.before_request
-    def handle_options():
-        if __import__('flask').request.method == 'OPTIONS':
-            # #region agent log
-            import json
-            import time
-            origin = __import__('flask').request.headers.get('Origin', 'no-origin')
-            _write_debug_log(json.dumps({"id":"log_options_request","timestamp":int(time.time()*1000),"location":"__init__.py:handle_options","message":"OPTIONS preflight request","data":{"origin":origin,"path":__import__('flask').request.path},"sessionId":"debug-session","runId":"run1","hypothesisId":"B"}))
-            # #endregion
-            # Flask-CORS will handle the response, but we log it
-

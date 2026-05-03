@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime
 
@@ -8,6 +9,8 @@ from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy import Index
 
 from ..extensions import db
+
+_logger = logging.getLogger(__name__)
 
 
 class TimestampMixin:
@@ -132,6 +135,10 @@ class User(TimestampMixin, BaseModel):
     must_change_password = db.Column(db.Boolean, default=True, nullable=False)
     last_login_at = db.Column(db.DateTime)
     contractor_id = db.Column(UUID(as_uuid=True), db.ForeignKey("contractor.id"))
+    # contractor | staff | admin — staff/admin unlock operational dashboards
+    role = db.Column(
+        db.String(32), nullable=False, default="contractor", server_default="contractor"
+    )
 
     contractor = db.relationship("Contractor", back_populates="users")
 
@@ -172,7 +179,12 @@ class ImportBatch(TimestampMixin, BaseModel):
         self.progress_percentage = (processed / total * 100) if total > 0 else 0.0
         db.session.flush()  # Flush first to ensure values are set
         db.session.commit()
-        print(f"[ImportBatch] Progress updated: {processed}/{total} ({self.progress_percentage:.1f}%)")
+        _logger.info(
+            "Import batch progress: %s/%s (%.1f%%)",
+            processed,
+            total,
+            self.progress_percentage,
+        )
     
     def update_metrics(self, inserted: int, updated: int, errors: int):
         """Update import metrics"""

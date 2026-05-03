@@ -3,18 +3,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
 from dotenv import load_dotenv
 
-# Load .env file before reading environment variables
+# Load .env from backend directory when present (local development only).
 env_path = Path(__file__).resolve().parent.parent / ".env"
 if env_path.exists():
-    # If .env exists, use it (for local development)
     load_dotenv(env_path)
-else:
-    # If .env doesn't exist, use production.env (for server deployment)
-    production_env_path = Path(__file__).resolve().parent.parent / "production.env"
-    if production_env_path.exists():
-        load_dotenv(production_env_path)
 
 
 @dataclass
@@ -26,11 +21,8 @@ class Settings:
     ENV: str = os.getenv("FLASK_ENV", "development")
     DEBUG: bool = os.getenv("FLASK_DEBUG", "1") == "1"
 
-    # SQLAlchemy
-    _default_db_path = Path(__file__).resolve().parent.parent / "instance" / "app.db"
-    SQLALCHEMY_DATABASE_URI: str = os.getenv(
-        "DATABASE_URL", f"sqlite:///{_default_db_path}"
-    )
+    # SQLAlchemy — DATABASE_URL is required at runtime (validated in create_app)
+    SQLALCHEMY_DATABASE_URI: str = os.getenv("DATABASE_URL", "")
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
 
     # JWT
@@ -46,4 +38,3 @@ class Settings:
     # Uploads
     UPLOAD_ROOT: Path = Path(os.getenv("UPLOAD_ROOT", "uploads"))
     MAX_CONTENT_LENGTH: int = int(os.getenv("MAX_CONTENT_LENGTH", str(25 * 1024 * 1024)))
-
