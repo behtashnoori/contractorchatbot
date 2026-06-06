@@ -8,12 +8,13 @@ from flask_jwt_extended import (
 )
 
 from ..extensions import db
-from ..models import Contractor, User
+from ..models import Contractor, InvoiceSummary, User
 from ..services.audit_log import (
     ACTION_LOGIN,
     ENTITY_USER,
     record_audit,
 )
+from ..services.import_activation import active_filter
 from ..utils.api_errors import error_response
 from ..utils.auth_decorators import require_jwt_user
 from ..utils.auth_utils import (
@@ -47,6 +48,7 @@ def _try_lazy_provision_user(username: str, password: str) -> User | None:
 
     contractors = (
         Contractor.query.filter(
+            active_filter(Contractor),
             (Contractor.detail_code.like(f"%{detail_code_search}%"))
             & (Contractor.supplier_code.like(f"%{supplier_code_search}%"))
         )
@@ -149,6 +151,12 @@ def login():
         )
 
     contractor: Contractor | None = user.contractor
+    if contractor and not contractor.is_active:
+        return error_response(
+            403,
+            "inactive_contractor",
+            "Contractor account is inactive.",
+        )
     if contractor and contractor.status != "فعال":
         return error_response(
             403,
@@ -219,7 +227,7 @@ def me():
 
     contractor = user.contractor
     totals = {
-        "total_invoices": contractor.invoice_summaries.count(),
+        "total_invoices": contractor.invoice_summaries.filter(active_filter(InvoiceSummary)).count(),
         "pending_amount": 0,
         "approved_amount": 0,
     }

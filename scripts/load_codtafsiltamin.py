@@ -8,6 +8,13 @@ import psycopg2
 from psycopg2.extras import execute_values
 
 
+def _required_env(name: str) -> str:
+	value = os.getenv(name)
+	if not value:
+		raise RuntimeError(f"{name} must be set in the environment.")
+	return value
+
+
 def normalize_column_name(col: str) -> str:
 	"""Map Persian headers to internal names."""
 	col = str(col).strip().replace("\u200c", "")  # remove zero-width non-joiner
@@ -58,7 +65,7 @@ def insert_staging(df: pd.DataFrame, source_filename: str) -> int:
 		host=os.getenv("PGHOST", "localhost"),
 		port=int(os.getenv("PGPORT", "5432")),
 		user=os.getenv("PGUSER", "postgres"),
-		password=os.getenv("PGPASSWORD", "bagheri13"),
+		password=_required_env("PGPASSWORD"),
 		dbname=os.getenv("PGDATABASE", "contractor_portal"),
 	)
 	conn.autocommit = True
@@ -108,5 +115,4 @@ def main():
 
 if __name__ == "__main__":
 	main()
-
 

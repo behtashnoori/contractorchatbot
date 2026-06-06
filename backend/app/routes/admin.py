@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -22,11 +22,14 @@ from ..constants.import_status import (
 from ..extensions import db
 from ..models import Contractor, ImportBatch, ImportError, User, InvoiceSummary, InvoiceDetail
 from ..services.codtafsiltamin_importer import CodTafsiltaminImporter
+from ..services.import_activation import active_query, rollback_source_to_batch
 from ..utils.api_errors import error_response
 from ..utils.auth_decorators import require_staff
 from ..utils.auth_utils import generate_password, generate_username
 from ..services.audit_log import (
     ACTION_IMPORT_UPLOAD,
+    ACTION_IMPORT_ROLLBACK,
+    ACTION_IMPORT_ROLLBACK_FAILED,
     ENTITY_IMPORT_BATCH,
     record_audit,
 )
@@ -44,6 +47,24 @@ logger = logging.getLogger(__name__)
 # Create uploads directory if it doesn't exist
 UPLOADS_DIR = Path(__file__).parent.parent.parent / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
+
+
+def _utc_timestamp_name() -> str:
+    return datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+
+
+def _record_rollback_failure_audit(user_id, target_batch_id: UUID | None) -> None:
+    try:
+        record_audit(
+            user_id,
+            ACTION_IMPORT_ROLLBACK_FAILED,
+            ENTITY_IMPORT_BATCH,
+            target_batch_id.hex if target_batch_id else None,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("Failed to record rollback failure audit")
 
 
 def _process_file_background(batch_id: UUID, file_path: Path, source: str):
@@ -184,7 +205,7 @@ def upload_codtafsiltamin():
         )
 
     batch = ImportBatch(
-        name=f"codtafsiltamin-{datetime.utcnow():%Y%m%d%H%M%S}",
+        name=f"codtafsiltamin-{_utc_timestamp_name()}",
         source="codtafsiltamin",
         status=STATUS_PENDING,
         uploaded_by=g.current_user.username,
@@ -259,7 +280,7 @@ def upload_codtafsiltamin():
     )
 
     # Count total unique contractors in database
-    total_contractors = Contractor.query.count()
+    total_contractors = active_query(Contractor).count()
 
     return (
         jsonify(
@@ -302,7 +323,7 @@ def upload_contractors_one():
 
         # Create batch
         batch = ImportBatch(
-            name=f"contractors-1-{datetime.utcnow():%Y%m%d%H%M%S}",
+            name=f"contractors-1-{_utc_timestamp_name()}",
             source="contractors-1",
             status=STATUS_PENDING,
             uploaded_by=g.current_user.username,
@@ -396,6 +417,100 @@ def get_upload_progress(batch_id):
     }), 200
 
 
+@admin_bp.post("/imports/rollback")
+@require_staff
+def rollback_import_batch():
+    payload = request.get_json(silent=True) or {}
+    source = (payload.get("source") or "").strip()
+    batch_id = payload.get("target_batch_id") or payload.get("batch_id")
+
+    if not source or not batch_id:
+        _record_rollback_failure_audit(g.current_user.id, None)
+        logger.warning(
+            "Import rollback rejected: source=%s target_batch_id=%s reason=missing_required_fields",
+            source or None,
+            None,
+        )
+        return error_response(
+            400,
+            "invalid_rollback_request",
+            "Both source and target_batch_id are required.",
+        )
+
+    try:
+        batch_uuid = UUID(str(batch_id))
+    except (ValueError, TypeError):
+        _record_rollback_failure_audit(g.current_user.id, None)
+        logger.warning(
+            "Import rollback rejected: source=%s target_batch_id=%s reason=invalid_batch_id",
+            source or None,
+            None,
+        )
+        return error_response(
+            400,
+            "invalid_batch_id",
+            "Target batch id must be a valid UUID.",
+        )
+
+    target_batch = db.session.get(ImportBatch, batch_uuid)
+    if not target_batch:
+        _record_rollback_failure_audit(g.current_user.id, batch_uuid)
+        logger.warning(
+            "Import rollback rejected: source=%s target_batch_id=%s reason=batch_not_found",
+            source or None,
+            batch_uuid.hex,
+        )
+        return error_response(404, "not_found", "Batch not found.")
+
+    try:
+        result = rollback_source_to_batch(source, target_batch.id)
+        record_audit(
+            g.current_user.id,
+            ACTION_IMPORT_ROLLBACK,
+            ENTITY_IMPORT_BATCH,
+            target_batch.id.hex,
+        )
+        db.session.commit()
+    except ValueError as exc:
+        db.session.rollback()
+        _record_rollback_failure_audit(g.current_user.id, batch_uuid)
+        logger.warning(
+            "Import rollback rejected: source=%s target_batch_id=%s reason=%s",
+            source or None,
+            batch_uuid.hex,
+            str(exc),
+        )
+        return error_response(
+            400,
+            "invalid_rollback_target",
+            str(exc),
+        )
+    except Exception:
+        db.session.rollback()
+        error_id = str(uuid.uuid4())
+        _record_rollback_failure_audit(g.current_user.id, batch_uuid)
+        logger.exception("Import rollback failed [%s]", error_id)
+        return error_response(
+            500,
+            "internal_error",
+            "An unexpected error occurred",
+            error_id=error_id,
+        )
+
+    return (
+        jsonify(
+            {
+                "status": "rolled_back",
+                "source": result.source,
+                "target_batch_id": result.target_batch_id,
+                "previous_active_batch_ids": result.previous_active_batch_ids,
+                "activated_counts": result.activated_counts,
+            }
+        ),
+        200,
+    )
+
+
 @admin_bp.post("/uploads/contractors-2")
 @require_staff
 def upload_contractors_two():
@@ -420,7 +535,7 @@ def upload_contractors_two():
 
         # Create batch
         batch = ImportBatch(
-            name=f"contractors-2-{datetime.utcnow():%Y%m%d%H%M%S}",
+            name=f"contractors-2-{_utc_timestamp_name()}",
             source="contractors-2",
             status=STATUS_PENDING,
             uploaded_by=g.current_user.username,
@@ -546,7 +661,7 @@ def list_contractors():
     per_page = request.args.get("per_page", 20, type=int)
     search = request.args.get("search", "").strip()
 
-    query = Contractor.query
+    query = active_query(Contractor)
 
     if search:
         query = query.filter(
@@ -600,7 +715,7 @@ def create_contractor_user(contractor_id: str):
             "Contractor id must be a valid UUID.",
         )
 
-    contractor = Contractor.query.get(contractor_uuid)
+    contractor = active_query(Contractor).filter_by(id=contractor_uuid).first()
     if not contractor:
         return error_response(404, "contractor_not_found", "Contractor not found.")
 
@@ -658,7 +773,7 @@ def list_invoice_summaries():
     per_page = request.args.get("per_page", 20, type=int)
     search = request.args.get("search", "").strip()
 
-    query = InvoiceSummary.query
+    query = active_query(InvoiceSummary)
 
     if search:
         # Join with Contractor for search
@@ -715,7 +830,7 @@ def list_invoice_details():
     per_page = request.args.get("per_page", 20, type=int)
     search = request.args.get("search", "").strip()
 
-    query = InvoiceDetail.query
+    query = active_query(InvoiceDetail)
 
     if search:
         query = query.filter(
@@ -763,4 +878,3 @@ def list_invoice_details():
         ),
         200,
     )
-

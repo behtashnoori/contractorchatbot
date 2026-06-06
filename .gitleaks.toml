@@ -1,0 +1,27 @@
+title = "contractorchatbot secret scanning"
+
+[allowlist]
+description = "Allow documented placeholders and skip generated/local-only folders."
+regexes = [
+  '''<DB_HOST>''',
+  '''<DB_PORT>''',
+  '''<DB_NAME>''',
+  '''<DB_USER>''',
+  '''<DB_PASSWORD>''',
+  '''<DATABASE_URL>''',
+  '''<SECRET_KEY>''',
+  '''<JWT_SECRET_KEY>''',
+  '''<KPI_API_KEY>''',
+  '''<API_KEY>''',
+  '''<DEMO_PASSWORD>''',
+]
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)build/''',
+  '''(^|/)\.venv/''',
+  '''(^|/)venv/''',
+  '''(^|/)\.git/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)\.pytest_cache/''',
+]

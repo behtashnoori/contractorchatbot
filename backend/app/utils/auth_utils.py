@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 
 from flask_jwt_extended import get_jwt_identity
+from sqlalchemy import select
 
 from ..extensions import db
 from ..models import User
@@ -62,7 +63,21 @@ def get_current_user() -> User | None:
     uid = get_jwt_subject_uuid()
     if not uid:
         return None
-    return db.session.get(User, uid)
+    return load_user_from_database(uid)
+
+
+def load_user_from_database(uid: uuid.UUID) -> User | None:
+    """
+    Load the current User row from the database, refreshing any identity-map copy.
+
+    Authorization must not trust a User object that was loaded earlier in the
+    same session because role changes must take effect on the next request.
+    """
+    return db.session.execute(
+        select(User)
+        .where(User.id == uid)
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
 
 
 def load_authenticated_user() -> tuple[User | None, tuple | None]:
@@ -82,9 +97,11 @@ def load_authenticated_user() -> tuple[User | None, tuple | None]:
             "invalid_token",
             "Invalid or missing user id in token.",
         )
-    user = db.session.get(User, uid)
+    user = load_user_from_database(uid)
     if user is None:
         return None, error_response(404, "not_found", "User not found.")
+    if not user_has_staff_access(user) and user.contractor and not user.contractor.is_active:
+        return None, error_response(403, "forbidden", "Contractor account is inactive.")
     return user, None
 
 

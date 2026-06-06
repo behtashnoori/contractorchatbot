@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import logging
-import traceback
 from dataclasses import dataclass
-from datetime import datetime
-from io import StringIO
 from typing import Any
 
 import pandas as pd
 from werkzeug.datastructures import FileStorage
 
 from ..extensions import db
-from ..models import ImportBatch, ImportError, InvoiceSummary, InvoiceDetail
+from ..models import ImportBatch, ImportError, InvoiceSummary, InvoiceDetail, utc_now
+from .import_activation import (
+    deactivate_active_rows,
+    mark_batch_published,
+    mark_previous_active_replaced,
+)
 from .import_utils import normalize_code, normalize_str, parse_jalali, parse_decimal
 
 logger = logging.getLogger(__name__)
@@ -85,140 +87,86 @@ class ContractorsOneImporter:
         if missing:
             raise ValueError(f"ستون های حیاتی یافت نشدند: {', '.join(missing)}")
 
-        # Delete all existing data before importing new data
-        logger.info("Deleting existing data")
-
-        # First, delete all InvoiceSummary records (they reference ImportBatch)
-        deleted_summaries = db.session.query(InvoiceSummary).delete()
-        logger.info("Deleted %s existing InvoiceSummary records", deleted_summaries)
-
-        # Also delete InvoiceDetail records that reference these summaries (via cover_number)
-        # This is important because InvoiceDetail depends on InvoiceSummary
-        deleted_details = db.session.query(InvoiceDetail).delete()
-        logger.info("Deleted %s existing InvoiceDetail records (dependent data)", deleted_details)
-        
-        # Then delete ImportError records for contractors-1 batches (excluding current batch)
-        contractors_one_batch_ids = [
-            batch.id for batch in ImportBatch.query.filter_by(source="contractors-1").all()
-            if batch.id != self.batch.id  # Exclude current batch
-        ]
-        if contractors_one_batch_ids:
-            deleted_errors = ImportError.query.filter(ImportError.batch_id.in_(contractors_one_batch_ids)).delete()
-            logger.info("Deleted %s ImportError records", deleted_errors)
-        
-        # Finally delete ImportBatch records (excluding current batch)
-        deleted_batches = ImportBatch.query.filter(
-            ImportBatch.source == "contractors-1",
-            ImportBatch.id != self.batch.id  # Exclude current batch
-        ).delete()
-        logger.info("Deleted %s ImportBatch records", deleted_batches)
-        
-        db.session.commit()
-
-        inserted, updated, errors = 0, 0, 0
-        total_rows = len(dataframe)
-        logger.info("Total rows to process: %s", total_rows)
-        
-        # Update batch with total rows
-        db.session.refresh(self.batch)
-        self.batch.total_rows = total_rows
-        self.batch.rows_processed = 0
-        self.batch.progress_percentage = 0.0
-        db.session.commit()
+        preflight_insert_data, preflight_error_records = self._preflight_rows(dataframe, column_map)
+        if not preflight_insert_data:
+            raise ValueError("contractors-1 import has no valid invoice summary rows.")
         logger.info(
-            "Batch initialized: total_rows=%s rows_processed=%s progress_percentage=%s",
-            self.batch.total_rows,
-            self.batch.rows_processed,
-            self.batch.progress_percentage,
+            "Preflight completed for contractors-1: valid_rows=%s row_errors=%s",
+            len(preflight_insert_data),
+            len(preflight_error_records),
         )
-        
-        # Use COPY command for large files (>1000 rows) - much faster
-        USE_COPY = total_rows > 1000
-        if USE_COPY:
-            logger.info("Using COPY command for large file (%s rows)", total_rows)
-            return self._run_with_copy(dataframe, column_map, total_rows)
-        
-        # Adaptive batch size: larger batches for larger files, but cap at 1000
-        # This balances memory usage with commit frequency
-        BATCH_SIZE = min(max(200, total_rows // 10), 1000)
-        logger.info("Using batch size: %s for %s rows", BATCH_SIZE, total_rows)
-        
-        # Convert to dict records for faster iteration
-        rows_dict = dataframe.to_dict('records')
-        
-        # Prepare bulk data
-        logger.info("Processing %s rows", total_rows)
-        
-        insert_data = []
-        error_records = []
-        
-        # Disable autoflush for better performance
-        original_autoflush = db.session.autoflush
-        db.session.autoflush = False
-        
+        return self._publish_preflight_rows(
+            preflight_insert_data,
+            preflight_error_records,
+            len(dataframe),
+        )
+
+
+    def _preflight_rows(self, dataframe: pd.DataFrame, column_map: dict[str, str]) -> tuple[list[dict], list[dict]]:
+        insert_data: list[dict] = []
+        error_records: list[dict] = []
+
+        for idx, row_dict in enumerate(dataframe.to_dict('records')):
+            try:
+                cover_number = normalize_str(self._value_for_dict(row_dict, column_map, "cover_number"))
+                if not cover_number:
+                    raise ValueError("شماره روکش خالی است")
+
+                if len(cover_number) > 64:
+                    cover_number = cover_number[:64]
+
+                data = self._prepare_summary_data(row_dict, column_map, cover_number)
+                now = utc_now()
+                data['created_at'] = now
+                data['updated_at'] = now
+                insert_data.append(data)
+            except Exception as exc:
+                now = utc_now()
+                error_records.append({
+                    'batch_id': self.batch.id,
+                    'source_file': 'contractors-1',
+                    'row_index': idx + 2,
+                    'message': str(exc)[:255],
+                    'payload': row_dict,
+                    'created_at': now,
+                    'updated_at': now,
+                })
+
+        return insert_data, error_records
+
+    def _publish_preflight_rows(
+        self,
+        insert_data: list[dict],
+        error_records: list[dict],
+        total_rows: int,
+    ) -> ImportResult:
+        inserted = len(insert_data)
+        updated = 0
+        errors = len(error_records)
+
         try:
-            for idx, row_dict in enumerate(rows_dict):
-                try:
-                    cover_number = normalize_str(self._value_for_dict(row_dict, column_map, "cover_number"))
-                    if not cover_number:
-                        raise ValueError("شماره روکش خالی است")
-                    
-                    if len(cover_number) > 64:
-                        cover_number = cover_number[:64]
-                    
-                    # Prepare data dict
-                    data = self._prepare_summary_data(row_dict, column_map, cover_number)
-                    
-                    # Always insert new (no update logic)
-                    data['created_at'] = datetime.utcnow()  # Set timestamps for bulk insert
-                    data['updated_at'] = datetime.utcnow()
-                    insert_data.append(data)
-                    inserted += 1
-                    
-                    # Batch processing
-                    if (idx + 1) % BATCH_SIZE == 0:
-                        self._bulk_process_insert_only(insert_data, error_records)
-                        insert_data = []
-                        error_records = []
-                        
-                        # Update progress
-                        self.batch.update_progress(idx + 1, total_rows)
-                        logger.info(
-                            "Progress updated: %s/%s (%.1f%%) inserted=%s errors=%s",
-                            idx + 1,
-                            total_rows,
-                            self.batch.progress_percentage,
-                            inserted,
-                            errors,
-                        )
-                        
-                except Exception as exc:  # pragma: no cover - defensive logging
-                    errors += 1
-                    now = datetime.utcnow()
-                    error_records.append({
-                        'batch_id': self.batch.id,
-                        'source_file': 'contractors-1',
-                        'row_index': idx + 2,
-                        'message': str(exc)[:255],  # Truncate to 255 chars
-                        'payload': row_dict,  # Use dict directly instead of Series
-                        'created_at': now,
-                        'updated_at': now,
-                    })
-            
-            # Final batch
-            if insert_data or error_records:
-                self._bulk_process_insert_only(insert_data, error_records)
-            
-            # Final progress update
-            self.batch.update_progress(total_rows, total_rows)
-            logger.info("Final progress: %s/%s (100%%)", total_rows, total_rows)
-            
-        finally:
-            # Restore original autoflush setting
-            db.session.autoflush = original_autoflush
-        
-        # Final commit to ensure all changes are saved
-        db.session.commit()
+            logger.info("Publishing preflighted contractors-1 rows in one transaction")
+            mark_previous_active_replaced("contractors-1", self.batch)
+            deactivate_active_rows("contractors-1")
+
+            self.batch.total_rows = total_rows
+            self.batch.rows_processed = total_rows
+            self.batch.progress_percentage = 100.0 if total_rows else 0.0
+            mark_batch_published(self.batch)
+
+            if insert_data:
+                for row in insert_data:
+                    row["is_active"] = True
+                db.session.bulk_insert_mappings(InvoiceSummary, insert_data)
+            if error_records:
+                db.session.bulk_insert_mappings(ImportError, error_records)
+
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("contractors-1 publish failed; transaction rolled back")
+            raise
+
         logger.info(
             "Final commit completed: inserted=%s updated=%s errors=%s",
             inserted,
@@ -290,36 +238,6 @@ class ContractorsOneImporter:
         }
         return data
 
-    def _bulk_process(self, insert_data: list, update_data: list, error_records: list):
-        """Bulk insert/update and error handling - commits after each batch for better performance"""
-        try:
-            if insert_data:
-                db.session.bulk_insert_mappings(InvoiceSummary, insert_data)
-            if update_data:
-                db.session.bulk_update_mappings(InvoiceSummary, update_data)
-            if error_records:
-                db.session.bulk_insert_mappings(ImportError, error_records)
-            db.session.commit()  # Commit after each batch instead of flush - prevents timeout
-        except Exception as exc:
-            db.session.rollback()
-            logger.exception("Error in _bulk_process: %s", exc)
-            traceback.print_exc()
-            raise  # Re-raise to be handled by caller
-
-    def _bulk_process_insert_only(self, insert_data: list, error_records: list):
-        """Bulk insert only (no update) - commits after each batch for better performance"""
-        try:
-            if insert_data:
-                db.session.bulk_insert_mappings(InvoiceSummary, insert_data)
-            if error_records:
-                db.session.bulk_insert_mappings(ImportError, error_records)
-            db.session.commit()  # Commit after each batch instead of flush - prevents timeout
-        except Exception as exc:
-            db.session.rollback()
-            logger.exception("Error in _bulk_process_insert_only: %s", exc)
-            traceback.print_exc()
-            raise  # Re-raise to be handled by caller
-
     def _prepare_raw_payload(self, row_dict: dict, column_map: dict[str, str]) -> dict:
         """Prepare optimized raw_payload - only include mapped columns to reduce size"""
         # Only include columns that are actually mapped (relevant data)
@@ -345,95 +263,6 @@ class ContractorsOneImporter:
                     pass
                 payload[str(col_name)] = value
         return payload
-
-    def _run_with_copy(self, dataframe: pd.DataFrame, column_map: dict[str, str], total_rows: int) -> ImportResult:
-        """Use PostgreSQL COPY command for fast bulk insert (10-50x faster for large files)"""
-        inserted, updated, errors = 0, 0, 0
-        rows_dict = dataframe.to_dict('records')
-        
-        # Prepare data (only insert, no update)
-        insert_rows = []
-        error_records = []
-        
-        for idx, row_dict in enumerate(rows_dict):
-            try:
-                cover_number = normalize_str(self._value_for_dict(row_dict, column_map, "cover_number"))
-                if not cover_number:
-                    raise ValueError("شماره روکش خالی است")
-                
-                if len(cover_number) > 64:
-                    cover_number = cover_number[:64]
-                
-                data = self._prepare_summary_data(row_dict, column_map, cover_number)
-                data['created_at'] = datetime.utcnow()
-                data['updated_at'] = datetime.utcnow()
-                insert_rows.append(data)
-                inserted += 1
-                
-                # Update progress every 100 rows
-                if (idx + 1) % 100 == 0:
-                    self.batch.update_progress(idx + 1, total_rows)
-                    
-            except Exception as exc:
-                errors += 1
-                now = datetime.utcnow()
-                error_records.append({
-                    'batch_id': self.batch.id,
-                    'source_file': 'contractors-1',
-                    'row_index': idx + 2,
-                    'message': str(exc)[:255],
-                    'payload': row_dict,
-                    'created_at': now,
-                    'updated_at': now,
-                })
-        
-        # Use COPY for inserts (very fast!)
-        # If insert fails, we must raise exception to prevent incorrect metrics
-        if insert_rows:
-            self._copy_insert(insert_rows)
-        
-        # Insert errors
-        try:
-            if error_records:
-                db.session.bulk_insert_mappings(ImportError, error_records)
-                db.session.commit()
-                logger.info("Successfully inserted %s error records", len(error_records))
-        except Exception as exc:
-            logger.exception("Error inserting error records: %s", exc)
-            db.session.rollback()
-            traceback.print_exc()
-        
-        # Final progress update
-        self.batch.update_progress(total_rows, total_rows)
-        logger.info("Final progress: %s/%s (100%%)", total_rows, total_rows)
-
-        # Final commit to ensure all changes are saved
-        db.session.commit()
-        logger.info(
-            "COPY completed: inserted=%s updated=%s errors=%s",
-            inserted,
-            updated,
-            errors,
-        )
-        return ImportResult(inserted=inserted, updated=updated, errors=errors)
-    
-    def _copy_insert(self, rows: list[dict]):
-        """Use PostgreSQL COPY for fast bulk insert"""
-        if not rows:
-            return
-        
-        try:
-            # For COPY command, it's easier to use bulk_insert_mappings for complex types
-            # But we can optimize by using raw SQL for simple inserts
-            # For now, use bulk_insert_mappings which is still fast and handles types correctly
-            db.session.bulk_insert_mappings(InvoiceSummary, rows)
-            db.session.commit()
-            logger.info("Successfully inserted %s rows", len(rows))
-        except Exception as exc:
-            db.session.rollback()
-            logger.exception("Error inserting %s rows: %s", len(rows), exc)
-            traceback.print_exc()
-            raise  # Re-raise to be handled by caller
 
     def _value_for_dict(self, row_dict: dict, column_map: dict[str, str], key: str) -> Any:
         """Get value from dict row (faster than Series)"""

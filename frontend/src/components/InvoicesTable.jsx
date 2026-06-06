@@ -7,7 +7,6 @@ import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import TablePagination from '@mui/material/TablePagination';
-import Chip from '@mui/material/Chip';
 import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -20,6 +19,7 @@ import { useTheme } from '@mui/material/styles';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs from 'dayjs';
 import jalaliday from 'jalaliday';
+import { StatusChip } from './StatusChip.jsx';
 
 dayjs.extend(jalaliday);
 
@@ -48,51 +48,7 @@ export function InvoicesTable({ data, pagination, onPageChange, onPageSizeChange
                 <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
                   {row.cover_number}
                 </Typography>
-                {row.status && (
-                  (() => {
-                    // تعیین رنگ بر اساس نوع وضعیت (هماهنگ با DashboardPage)
-                    let chipColor, chipBgColor, chipTextColor;
-                    if (row.status === 'تاييد شده' || row.status === 'تایید شده' || row.status === 'approved') {
-                      // تایید شده: سبز پررنگ
-                      chipColor = '#2E7D32';
-                      chipBgColor = '#E8F5E9';
-                      chipTextColor = '#2E7D32';
-                    } else if (row.status === 'ثبت شده' || row.status === 'registered') {
-                      // ثبت شده: سبز کم رنگ
-                      chipColor = '#66BB6A';
-                      chipBgColor = '#F1F8E9';
-                      chipTextColor = '#66BB6A';
-                    } else if (row.status === 'معلق' || row.status === 'pending' || row.status === 'در انتظار' || row.status === 'جاری') {
-                      // معلق: نارنجی
-                      chipColor = '#FF9800';
-                      chipBgColor = '#FFF8E1';
-                      chipTextColor = '#FF9800';
-                    } else if (row.status === 'عودت شده' || row.status === 'rejected' || row.status === 'رد شده') {
-                      // عودت شده: قرمز
-                      chipColor = '#F44336';
-                      chipBgColor = '#FCE4EC';
-                      chipTextColor = '#F44336';
-                    } else {
-                      // پیش‌فرض
-                      chipColor = '#2196F3';
-                      chipBgColor = '#E3F2FD';
-                      chipTextColor = '#2196F3';
-                    }
-                    
-                    return (
-                      <Chip
-                        label={row.status}
-                        size="small"
-                        sx={{
-                          fontWeight: 'bold',
-                          bgcolor: chipBgColor,
-                          color: chipTextColor,
-                          border: `1px solid ${chipColor}`,
-                        }}
-                      />
-                    );
-                  })()
-                )}
+                {row.status && <StatusChip status={row.status} />}
               </Box>
               <Divider sx={{ my: 2 }} />
               <Grid container spacing={2}>
@@ -246,53 +202,7 @@ export function InvoicesTable({ data, pagination, onPageChange, onPageSizeChange
                     </Button>
                   </TableCell>
                   <TableCell align="right" sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}>
-                    {row.status ? (
-                      (() => {
-                        // تعیین رنگ بر اساس نوع وضعیت (هماهنگ با DashboardPage)
-                        let chipColor, chipBgColor, chipTextColor;
-                        if (row.status === 'تاييد شده' || row.status === 'تایید شده' || row.status === 'approved') {
-                          // تایید شده: سبز پررنگ
-                          chipColor = '#2E7D32';
-                          chipBgColor = '#E8F5E9';
-                          chipTextColor = '#2E7D32';
-                        } else if (row.status === 'ثبت شده' || row.status === 'registered') {
-                          // ثبت شده: سبز کم رنگ
-                          chipColor = '#66BB6A';
-                          chipBgColor = '#F1F8E9';
-                          chipTextColor = '#66BB6A';
-                        } else if (row.status === 'معلق' || row.status === 'pending' || row.status === 'در انتظار' || row.status === 'جاری') {
-                          // معلق: نارنجی
-                          chipColor = '#FF9800';
-                          chipBgColor = '#FFF8E1';
-                          chipTextColor = '#FF9800';
-                        } else if (row.status === 'عودت شده' || row.status === 'rejected' || row.status === 'رد شده') {
-                          // عودت شده: قرمز
-                          chipColor = '#F44336';
-                          chipBgColor = '#FCE4EC';
-                          chipTextColor = '#F44336';
-                        } else {
-                          // پیش‌فرض
-                          chipColor = '#2196F3';
-                          chipBgColor = '#E3F2FD';
-                          chipTextColor = '#2196F3';
-                        }
-                        
-                        return (
-                          <Chip
-                            label={row.status}
-                            size="small"
-                            sx={{
-                              fontWeight: 'bold',
-                              bgcolor: chipBgColor,
-                              color: chipTextColor,
-                              border: `1px solid ${chipColor}`,
-                            }}
-                          />
-                        );
-                      })()
-                    ) : (
-                      '-'
-                    )}
+                    {row.status ? <StatusChip status={row.status} /> : '-'}
                   </TableCell>
                 </TableRow>
               ))
@@ -343,4 +253,5 @@ InvoicesTable.propTypes = {
   onPageSizeChange: PropTypes.func.isRequired,
   onView: PropTypes.func.isRequired,
 };
+
 

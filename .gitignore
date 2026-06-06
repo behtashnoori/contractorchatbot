@@ -27,6 +27,10 @@ env/
 *.env
 !.env.example
 !config.example.env
+backend/.env
+frontend/.env
+api/.env
+*.local
 
 # Flask
 instance/

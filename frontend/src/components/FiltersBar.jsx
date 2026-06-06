@@ -19,7 +19,7 @@ const STATUS_OPTIONS = [
   { label: 'رد شده', value: 'رد شده' },
 ];
 
-export function FiltersBar({ filters, onChange, onReset }) {
+export function FiltersBar({ filters, onChange }) {
   const handleInput = (name) => (event) => {
     onChange({ ...filters, [name]: event.target.value });
   };
@@ -130,6 +130,6 @@ FiltersBar.propTypes = {
     search: PropTypes.string,
   }).isRequired,
   onChange: PropTypes.func.isRequired,
-  onReset: PropTypes.func.isRequired,
 };
+
 

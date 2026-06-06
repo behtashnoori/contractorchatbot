@@ -2,24 +2,29 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declared_attr
-from sqlalchemy import Index
+from sqlalchemy import Index, text
 
 from ..extensions import db
 
 _logger = logging.getLogger(__name__)
 
 
+def utc_now() -> datetime:
+    """UTC timestamp stored as naive datetime for current DateTime columns."""
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 class TimestampMixin:
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
     updated_at = db.Column(
         db.DateTime,
         nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=utc_now,
+        onupdate=utc_now,
     )
 
 
@@ -38,13 +43,19 @@ class BaseModel(db.Model):
 
 
 class Contractor(TimestampMixin, BaseModel):
-    detail_code = db.Column(db.String(32), unique=True, nullable=False, index=True)
+    detail_code = db.Column(db.String(32), nullable=False, index=True)
     supplier_code = db.Column(db.String(32), index=True)
     name = db.Column(db.String(255), nullable=False)
     status = db.Column(db.String(32), nullable=False)
     type = db.Column(db.String(64))
     relationship_start = db.Column(db.Date)
     raw_payload = db.Column(db.JSON)
+    last_update_batch_id = db.Column(
+        UUID(as_uuid=True), db.ForeignKey("importbatch.id"), nullable=True
+    )
+    is_active = db.Column(
+        db.Boolean, nullable=False, default=True, server_default=db.text("true")
+    )
 
     users = db.relationship("User", back_populates="contractor", lazy="dynamic")
     invoice_summaries = db.relationship(
@@ -52,6 +63,16 @@ class Contractor(TimestampMixin, BaseModel):
     )
     invoice_details = db.relationship(
         "InvoiceDetail", back_populates="contractor", lazy="dynamic"
+    )
+    batch = db.relationship("ImportBatch", back_populates="contractors")
+
+    __table_args__ = (
+        Index(
+            "uq_contractor_active_detail_code",
+            "detail_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
     )
 
 
@@ -82,6 +103,9 @@ class InvoiceSummary(TimestampMixin, BaseModel):
     raw_payload = db.Column(db.JSON)
     last_update_batch_id = db.Column(
         UUID(as_uuid=True), db.ForeignKey("importbatch.id"), nullable=True
+    )
+    is_active = db.Column(
+        db.Boolean, nullable=False, default=True, server_default=db.text("true")
     )
 
     contractor = db.relationship("Contractor", back_populates="invoice_summaries")
@@ -118,6 +142,9 @@ class InvoiceDetail(TimestampMixin, BaseModel):
     raw_payload = db.Column(db.JSON)
     last_update_batch_id = db.Column(
         UUID(as_uuid=True), db.ForeignKey("importbatch.id"), nullable=True
+    )
+    is_active = db.Column(
+        db.Boolean, nullable=False, default=True, server_default=db.text("true")
     )
 
     contractor = db.relationship("Contractor", back_populates="invoice_details")
@@ -167,10 +194,16 @@ class ImportBatch(TimestampMixin, BaseModel):
     inserted_count = db.Column(db.Integer, default=0)
     updated_count = db.Column(db.Integer, default=0)
     errors_count = db.Column(db.Integer, default=0)
+    published_at = db.Column(db.DateTime)
+    replaced_by_batch_id = db.Column(
+        UUID(as_uuid=True), db.ForeignKey("importbatch.id"), nullable=True
+    )
 
+    contractors = db.relationship("Contractor", back_populates="batch")
     invoice_summaries = db.relationship("InvoiceSummary", back_populates="batch")
     invoice_details = db.relationship("InvoiceDetail", back_populates="batch")
     errors = db.relationship("ImportError", back_populates="batch")
+    replaced_by_batch = db.relationship("ImportBatch", remote_side="ImportBatch.id")
     
     def update_progress(self, processed: int, total: int):
         """Update progress tracking"""
@@ -216,5 +249,5 @@ class AuditLog(BaseModel):
     action = db.Column(db.String(64), nullable=False, index=True)
     entity = db.Column(db.String(64), nullable=False)
     entity_id = db.Column(db.String(64), nullable=True)
-    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=utc_now)
 

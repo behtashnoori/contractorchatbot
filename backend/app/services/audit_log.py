@@ -10,6 +10,8 @@ from ..models import AuditLog
 ACTION_LOGIN = "login"
 ACTION_INVOICE_VIEW = "invoice.view"
 ACTION_IMPORT_UPLOAD = "import.upload"
+ACTION_IMPORT_ROLLBACK = "import.rollback"
+ACTION_IMPORT_ROLLBACK_FAILED = "import.rollback.failed"
 
 ENTITY_USER = "user"
 ENTITY_INVOICE_SUMMARY = "invoice_summary"

@@ -121,6 +121,13 @@ _DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 _DEFAULT_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 
+def _build_log_formatter(fmt: str, datefmt: str) -> logging.Formatter:
+    try:
+        return logging.Formatter(fmt=fmt, datefmt=datefmt)
+    except (TypeError, ValueError):
+        return logging.Formatter(fmt=_DEFAULT_LOG_FORMAT, datefmt=datefmt)
+
+
 def _configure_logging(app: Flask) -> None:
     # In production, prefer a reverse proxy or Werkzeug config so access logs
     # do not retain Authorization headers.
@@ -128,7 +135,7 @@ def _configure_logging(app: Flask) -> None:
     level = getattr(logging, level_name, logging.INFO)
     fmt = (os.getenv("LOG_FORMAT") or _DEFAULT_LOG_FORMAT).strip() or _DEFAULT_LOG_FORMAT
     datefmt = (os.getenv("LOG_DATEFMT") or _DEFAULT_LOG_DATEFMT).strip() or _DEFAULT_LOG_DATEFMT
-    formatter = logging.Formatter(fmt=fmt, datefmt=datefmt)
+    formatter = _build_log_formatter(fmt, datefmt)
     root = logging.getLogger()
     root.setLevel(level)
     if not root.handlers:

@@ -34,8 +34,10 @@ export function AuthProvider({ children }) {
           totals: data.totals,
           mustChangePassword: data.user?.must_change_password ?? false,
         });
-      } catch (error) {
-        console.error('[AuthProvider] Bootstrap auth failed');
+      } catch {
+        if (import.meta.env.DEV) {
+          console.debug('[AuthProvider] Bootstrap auth failed');
+        }
         authStorage.clear();
         setAuthState({
           isAuthenticated: false,
@@ -110,4 +112,3 @@ export const useAuthContext = () => {
   }
   return ctx;
 };
-

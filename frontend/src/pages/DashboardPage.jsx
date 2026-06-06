@@ -20,6 +20,7 @@ import { AppLayout } from '../components/AppLayout.jsx';
 import { SummaryCard } from '../components/SummaryCard.jsx';
 import { FiltersBar } from '../components/FiltersBar.jsx';
 import { InvoicesTable } from '../components/InvoicesTable.jsx';
+import { getStatusVisuals } from '../utils/status.js';
 
 const DEFAULT_FILTERS = {
   status: '',
@@ -45,7 +46,7 @@ const filtersFromSearchParams = (searchParams) => {
 };
 
 export function DashboardPage() {
-  const { contractor, user } = useAuth();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const staffDashboard = hasStaffAccess(user);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -77,7 +78,6 @@ export function DashboardPage() {
         params.cover_number = filters.cover_number;
       }
       
-      console.log('[DashboardPage] Query params:', params);
       return params;
     },
     [filters, page, pageSize],
@@ -105,7 +105,6 @@ export function DashboardPage() {
       if (filters.status) {
         params.status = filters.status;
       }
-      console.log('[DashboardPage] Fetching filter options with params:', params);
       return fetchFilterOptions(params);
     },
     enabled: true, // همیشه فعال
@@ -123,11 +122,6 @@ export function DashboardPage() {
     setPage(1);
   };
 
-  const handleReset = () => {
-    setFilters(DEFAULT_FILTERS);
-    setPage(1);
-    setPageSize(20);
-  };
 
   const handleView = (coverNumber) => {
     navigate(`/invoice/${coverNumber}`);
@@ -168,7 +162,6 @@ export function DashboardPage() {
                       if (isSelected) {
                         newFilters.status = '';
                       }
-                      console.log('[DashboardPage] Fiscal year clicked:', year, 'New filters:', newFilters);
                       handleFiltersChange(newFilters);
                     }}
                     sx={{
@@ -248,36 +241,19 @@ export function DashboardPage() {
               
               // تعیین آیکون و رنگ بر اساس نوع وضعیت (Gamification)
               // رنگ‌ها باید حتی وقتی انتخاب نشده هم اعمال شوند
-              let icon, iconBg, iconColor, borderColor;
-              if (status === 'تاييد شده' || status === 'تایید شده' || status === 'approved') {
-                // تایید شده: سبز پررنگ
+              let icon;
+              const statusVisuals = getStatusVisuals(status);
+              const iconBg = statusVisuals.bgColor;
+              const iconColor = statusVisuals.color;
+              const borderColor = isSelected ? statusVisuals.color : `${statusVisuals.color}40`;
+              if (statusVisuals.kind === 'approved' || statusVisuals.kind === 'registered') {
                 icon = <CheckCircleIcon sx={{ fontSize: 24 }} />;
-                iconBg = isSelected ? '#C8E6C9' : '#E8F5E9';
-                iconColor = '#2E7D32';  // همیشه سبز پررنگ
-                borderColor = isSelected ? '#2E7D32' : '#2E7D3240';
-              } else if (status === 'ثبت شده' || status === 'registered') {
-                // ثبت شده: سبز کم رنگ
-                icon = <CheckCircleIcon sx={{ fontSize: 24 }} />;
-                iconBg = isSelected ? '#E8F5E9' : '#F1F8E9';
-                iconColor = '#66BB6A';  // همیشه سبز کم رنگ
-                borderColor = isSelected ? '#66BB6A' : '#66BB6A40';
-              } else if (status === 'معلق' || status === 'pending' || status === 'در انتظار' || status === 'جاری') {
-                // معلق: نارنجی
+              } else if (statusVisuals.kind === 'pending') {
                 icon = <AccessTimeIcon sx={{ fontSize: 24 }} />;
-                iconBg = isSelected ? '#FFF3E0' : '#FFF8E1';
-                iconColor = '#FF9800';  // همیشه نارنجی
-                borderColor = isSelected ? '#FF9800' : '#FF980040';
-              } else if (status === 'عودت شده' || status === 'rejected' || status === 'رد شده') {
-                // عودت شده: قرمز
+              } else if (statusVisuals.kind === 'rejected') {
                 icon = <CancelIcon sx={{ fontSize: 24 }} />;
-                iconBg = isSelected ? '#FFEBEE' : '#FCE4EC';
-                iconColor = '#F44336';  // همیشه قرمز
-                borderColor = isSelected ? '#F44336' : '#F4433640';
               } else {
                 icon = <PendingIcon sx={{ fontSize: 24 }} />;
-                iconBg = isSelected ? '#E3F2FD' : '#f5f5f5';
-                iconColor = '#2196F3';
-                borderColor = isSelected ? '#2196F3' : '#2196F340';
               }
 
               return (
@@ -291,7 +267,6 @@ export function DashboardPage() {
                       if (isSelected) {
                         newFilters.fiscal_year = '';
                       }
-                      console.log('[DashboardPage] Status clicked:', status, 'New filters:', newFilters);
                       handleFiltersChange(newFilters);
                     }}
                     sx={{
@@ -375,7 +350,7 @@ export function DashboardPage() {
         </Grid>
       </Grid>
 
-      <FiltersBar filters={filters} onChange={handleFiltersChange} onReset={handleReset} />
+      <FiltersBar filters={filters} onChange={handleFiltersChange} />
 
       {isError ? (
         <Alert severity="error" sx={{ direction: 'rtl' }} action={<Button onClick={() => refetch()}>تلاش مجدد</Button>}>
@@ -405,4 +380,6 @@ export function DashboardPage() {
     </AppLayout>
   );
 }
+
+
 

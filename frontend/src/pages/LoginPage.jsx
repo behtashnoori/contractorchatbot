@@ -18,10 +18,10 @@ import LockIcon from '@mui/icons-material/Lock';
 import DescriptionIcon from '@mui/icons-material/Description';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { useAuth } from '../hooks/useAuth.js';
-import { useNotification } from '../providers/NotificationProvider.jsx';
+import { useNotification } from '../hooks/useNotification.js';
 
 export function LoginPage() {
-  const { login, contractor } = useAuth();
+  const { login } = useAuth();
   const { showSuccess, showError } = useNotification();
   const navigate = useNavigate();
   const location = useLocation();
@@ -334,4 +334,3 @@ export function LoginPage() {
     </Box>
   );
 }
-

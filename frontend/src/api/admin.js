@@ -1,5 +1,11 @@
 import { apiClient } from './client.js';
 
+const devError = (...args) => {
+  if (import.meta.env.DEV) {
+    console.error(...args);
+  }
+};
+
 const uploadFile = async (url, file) => {
   const formData = new FormData();
   formData.append('file', file);
@@ -11,9 +17,11 @@ const uploadFile = async (url, file) => {
     });
     return data;
   } catch (error) {
-    console.error('Upload error:', error);
-    console.error('Error response:', error?.response?.data);
-    console.error('Error status:', error?.response?.status);
+    devError('Upload failed', {
+      status: error?.response?.status,
+      code: error?.code,
+      message: error?.message,
+    });
     
     if (error.code === 'ECONNABORTED') {
       throw new Error('زمان آپلود به پایان رسید. فایل شما در حال پردازش است، لطفاً چند دقیقه صبر کنید و دوباره تلاش کنید.');
@@ -78,4 +86,3 @@ export const getInvoiceDetails = async (params = {}) => {
   const { data } = await apiClient.get('/admin/invoice-details', { params });
   return data;
 };
-

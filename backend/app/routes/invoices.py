@@ -14,6 +14,7 @@ from ..services.audit_log import (
     ENTITY_INVOICE_SUMMARY,
     record_audit,
 )
+from ..services.import_activation import active_filter, active_query
 from ..utils.api_errors import error_response
 from ..utils.auth_decorators import require_jwt_user
 from ..utils.auth_utils import user_has_staff_access
@@ -78,7 +79,7 @@ def _invoice_summary_base_query_for_user(user: User):
     Returns None if the user is a contractor without a linked contractor row.
     """
     if user_has_staff_access(user):
-        return InvoiceSummary.query
+        return active_query(InvoiceSummary)
     if not user.contractor:
         return None
     contractor = user.contractor
@@ -87,6 +88,7 @@ def _invoice_summary_base_query_for_user(user: User):
     conditions.append(detail_code_condition)
     if contractor.supplier_code:
         matching_cover_numbers_subquery = select(distinct(InvoiceDetail.cover_number)).where(
+            active_filter(InvoiceDetail),
             (InvoiceDetail.supplier_code == contractor.supplier_code)
             | (InvoiceDetail.supplier_code.is_(None))
         ).scalar_subquery()
@@ -96,9 +98,9 @@ def _invoice_summary_base_query_for_user(user: User):
         )
         conditions.append(fallback_condition)
     if len(conditions) > 1:
-        query = InvoiceSummary.query.filter(or_(*conditions))
+        query = active_query(InvoiceSummary).filter(or_(*conditions))
     else:
-        query = InvoiceSummary.query.filter(conditions[0])
+        query = active_query(InvoiceSummary).filter(conditions[0])
     if contractor.supplier_code:
         query = query.filter(
             (InvoiceSummary.supplier_code == contractor.supplier_code)
@@ -127,10 +129,10 @@ def _fallback_summary_for_contractor_cover(
     cover_number: str, contractor
 ) -> InvoiceSummary | None:
     """When primary detail_code-scoped summary is missing, resolve via detail rows + supplier scope."""
-    any_summary = InvoiceSummary.query.filter_by(cover_number=cover_number).first()
+    any_summary = active_query(InvoiceSummary).filter_by(cover_number=cover_number).first()
     if not any_summary:
         return None
-    test_details = InvoiceDetail.query.filter_by(cover_number=cover_number)
+    test_details = active_query(InvoiceDetail).filter_by(cover_number=cover_number)
     if contractor.supplier_code:
         test_details = test_details.filter(
             (InvoiceDetail.supplier_code == contractor.supplier_code)
@@ -138,7 +140,7 @@ def _fallback_summary_for_contractor_cover(
         )
     if not test_details.first():
         return None
-    fallback_summary_query = InvoiceSummary.query.filter_by(cover_number=cover_number)
+    fallback_summary_query = active_query(InvoiceSummary).filter_by(cover_number=cover_number)
     if contractor.supplier_code:
         fallback_summary_query = fallback_summary_query.filter(
             (InvoiceSummary.supplier_code == contractor.supplier_code)
@@ -146,7 +148,7 @@ def _fallback_summary_for_contractor_cover(
         )
     summary = fallback_summary_query.order_by(InvoiceSummary.updated_at.desc()).first()
     if summary is None:
-        return InvoiceSummary.query.filter_by(cover_number=cover_number).order_by(
+        return active_query(InvoiceSummary).filter_by(cover_number=cover_number).order_by(
             InvoiceSummary.updated_at.desc()
         ).first()
     return summary
@@ -154,7 +156,7 @@ def _fallback_summary_for_contractor_cover(
 
 def _contractor_invoice_detail_scope(cover_number: str, contractor):
     """Details query and summary for contractor-scoped invoice detail view."""
-    summary_query = InvoiceSummary.query.filter_by(
+    summary_query = active_query(InvoiceSummary).filter_by(
         cover_number=cover_number, detail_code=contractor.detail_code
     )
     if contractor.supplier_code:
@@ -162,7 +164,7 @@ def _contractor_invoice_detail_scope(cover_number: str, contractor):
             (InvoiceSummary.supplier_code == contractor.supplier_code)
             | (InvoiceSummary.supplier_code.is_(None))
         )
-    details_query = InvoiceDetail.query.filter_by(cover_number=cover_number)
+    details_query = active_query(InvoiceDetail).filter_by(cover_number=cover_number)
     if contractor.supplier_code:
         details_query = details_query.filter(
             (InvoiceDetail.supplier_code == contractor.supplier_code)
@@ -264,7 +266,7 @@ def list_invoices():
     detail_codes = list(set([s.detail_code for s in pagination.items if s.detail_code]))
     
     # یک query برای همه details مربوط به summaries در این صفحه
-    all_details_query = InvoiceDetail.query.filter(
+    all_details_query = active_query(InvoiceDetail).filter(
         InvoiceDetail.cover_number.in_(cover_numbers)
     )
     if detail_codes:
@@ -365,8 +367,8 @@ def invoice_detail(cover_number: str):
 
     if staff_access:
         # کارشناس: همه فاکتورها را می‌بیند
-        summary_query = InvoiceSummary.query.filter_by(cover_number=cover_number)
-        details_query = InvoiceDetail.query.filter_by(cover_number=cover_number)
+        summary_query = active_query(InvoiceSummary).filter_by(cover_number=cover_number)
+        details_query = active_query(InvoiceDetail).filter_by(cover_number=cover_number)
         summary = summary_query.order_by(InvoiceSummary.updated_at.desc()).first()
     else:
         # پیمانکار: فقط فاکتورهای خودش را می‌بیند
@@ -565,4 +567,3 @@ def get_filter_options():
         "statuses": sorted(list(statuses)),
         "status_stats": status_stats,  # آمار وضعیت‌ها (تعداد و درصد)
     }), 200
-

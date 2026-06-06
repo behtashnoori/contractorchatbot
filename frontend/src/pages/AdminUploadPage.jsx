@@ -158,6 +158,24 @@ const CONTRACTORS_SAMPLE_ROWS = [
 
 const CONTRACTORS2_COLUMNS = ['توضیحات', 'مبنا', 'مبلغ ناخالص', 'وضعیت', 'عنوان قلم خرید', 'تامین کننده', 'احد/رمز', 'تاریخ', 'شماره'];
 
+
+const devLog = (...args) => {
+  if (import.meta.env.DEV) {
+    console.debug(...args);
+  }
+};
+
+const devWarn = (...args) => {
+  if (import.meta.env.DEV) {
+    console.warn(...args);
+  }
+};
+
+const devError = (...args) => {
+  if (import.meta.env.DEV) {
+    console.error(...args);
+  }
+};
 const CONTRACTORS2_SAMPLE_ROWS = [
   {
     description: '14040331',
@@ -220,7 +238,6 @@ export function AdminUploadPage() {
   const [contractorsResult, setContractorsResult] = useState(null);
   const [contractorsErrors, setContractorsErrors] = useState(null);
   const [contractorsProgress, setContractorsProgress] = useState(null);
-  const [contractorsProgressInterval, setContractorsProgressInterval] = useState(null);
   const contractorsProgressIntervalRef = useRef(null);
   
   const [contractorsTwoFile, setContractorsTwoFile] = useState(null);
@@ -254,7 +271,7 @@ export function AdminUploadPage() {
           const errorData = await getBatchErrors(data.batch_id);
           setCodErrors(errorData.errors || []);
         } catch (err) {
-          console.error('Failed to fetch errors:', err);
+          devError('Failed to fetch errors:', err);
         }
       }
     },
@@ -263,10 +280,10 @@ export function AdminUploadPage() {
   const contractorsMutation = useMutation({
     mutationFn: uploadContractorsOne,
     onSuccess: async (data) => {
-      console.log('[contractorsMutation] onSuccess called', data);
+      devLog('[contractorsMutation] onSuccess called', data);
       // If status is "pending", background worker has not finished yet — poll progress
       if (data.status === 'pending' && data.batch_id) {
-        console.log('[contractorsMutation] Starting polling for batch_id:', data.batch_id);
+        devLog('[contractorsMutation] Starting polling for batch_id:', data.batch_id);
         setContractorsProgress({
           status: 'pending',
           percentage: 0,
@@ -285,17 +302,17 @@ export function AdminUploadPage() {
         
         const pollProgress = async () => {
           if (!isPolling) {
-            console.log('[pollProgress] Polling stopped, exiting');
+            devLog('[pollProgress] Polling stopped, exiting');
             return;
           }
           
-          console.log('[pollProgress] Polling progress for batch_id:', data.batch_id);
+          devLog('[pollProgress] Polling progress for batch_id:', data.batch_id);
           try {
             const progressData = await getUploadProgress(data.batch_id);
-            console.log('[pollProgress] Progress data received:', progressData);
-            console.log('[pollProgress] Status:', progressData.status);
-            console.log('[pollProgress] Progress:', progressData.progress);
-            console.log('[pollProgress] Metrics:', progressData.metrics);
+            devLog('[pollProgress] Progress data received:', progressData);
+            devLog('[pollProgress] Status:', progressData.status);
+            devLog('[pollProgress] Progress:', progressData.progress);
+            devLog('[pollProgress] Metrics:', progressData.metrics);
             consecutiveErrors = 0; // Reset error counter on success
             pollDelay = basePollDelay; // Reset to base delay on success
             
@@ -313,7 +330,7 @@ export function AdminUploadPage() {
               progressData.status === 'completed' ||
               progressData.status === 'completed_with_errors';
             if (importTerminal) {
-              console.log('[pollProgress] Processing completed! Status:', progressData.status);
+              devLog('[pollProgress] Processing completed! Status:', progressData.status);
               isPolling = false;
               if (timeoutId) {
                 clearTimeout(timeoutId);
@@ -344,7 +361,7 @@ export function AdminUploadPage() {
                   const errorData = await getBatchErrors(data.batch_id);
                   setContractorsErrors(errorData.errors || []);
                 } catch (err) {
-                  console.error('Failed to fetch errors:', err);
+                  devError('Failed to fetch errors:', err);
                 }
               }
               return;
@@ -352,16 +369,16 @@ export function AdminUploadPage() {
             
             // Log if still processing
             if (progressData.status === 'processing') {
-              console.log('[pollProgress] Still processing...', {
+              devLog('[pollProgress] Still processing...', {
                 processed: progressData.progress?.processed,
                 total: progressData.progress?.total,
                 percentage: progressData.progress?.percentage,
               });
             }
           } catch (err) {
-            console.error('[pollProgress] Error fetching progress:', err);
-            console.error('[pollProgress] Error response:', err?.response?.data);
-            console.error('[pollProgress] Error status:', err?.response?.status);
+            devError('[pollProgress] Error fetching progress:', err);
+            devError('[pollProgress] Error response:', err?.response?.data);
+            devError('[pollProgress] Error status:', err?.response?.status);
             consecutiveErrors++;
             const isUnauthorized = err?.response?.status === 401;
             
@@ -371,14 +388,14 @@ export function AdminUploadPage() {
               const isRefreshFailed = err?.config?._retry === true;
               
               if (isRefreshFailed) {
-                console.error('[Progress Polling] Token refresh attempted but request still failed with 401');
-                console.error('[Progress Polling] This may indicate the new token is invalid or backend issue');
+                devError('[Progress Polling] Token refresh attempted but request still failed with 401');
+                devError('[Progress Polling] This may indicate the new token is invalid or backend issue');
                 // This means interceptor tried to refresh but request still failed
                 // Wait a bit longer before retrying to allow backend to sync
                 pollDelay = Math.min(pollDelay * 2, maxPollDelay);
                 
                 if (consecutiveErrors >= maxConsecutiveErrors) {
-                  console.error('[Progress Polling] Too many authentication failures after refresh, stopping polling');
+                  devError('[Progress Polling] Too many authentication failures after refresh, stopping polling');
                   isPolling = false;
                   if (timeoutId) {
                     clearTimeout(timeoutId);
@@ -396,20 +413,20 @@ export function AdminUploadPage() {
                 }
               } else {
                 // Interceptor is handling the refresh, just wait
-                console.log('[Progress Polling] 401 detected, waiting for token refresh...');
+                devLog('[Progress Polling] 401 detected, waiting for token refresh...');
                 // Don't count this as an error yet - interceptor will handle it
                 consecutiveErrors = Math.max(0, consecutiveErrors - 1); // Reduce error count
                 // Apply exponential backoff
                 pollDelay = Math.min(pollDelay * 1.5, maxPollDelay);
               }
             } else {
-              console.error('[Progress Polling] Failed to fetch progress:', err);
+              devError('[Progress Polling] Failed to fetch progress:', err);
               // Apply exponential backoff for other errors
               pollDelay = Math.min(pollDelay * 1.5, maxPollDelay);
               
               // For non-401 errors, stop after max errors
               if (consecutiveErrors >= maxConsecutiveErrors) {
-                console.error('[Progress Polling] Too many consecutive errors, stopping polling');
+                devError('[Progress Polling] Too many consecutive errors, stopping polling');
                 isPolling = false;
                 if (timeoutId) {
                   clearTimeout(timeoutId);
@@ -445,17 +462,17 @@ export function AdminUploadPage() {
             const errorData = await getBatchErrors(data.batch_id);
             setContractorsErrors(errorData.errors || []);
           } catch (err) {
-            console.error('Failed to fetch errors:', err);
+            devError('Failed to fetch errors:', err);
           }
         }
       }
     },
     onError: (error) => {
-      console.error('[contractorsMutation] onError called');
-      console.error('Upload error:', error);
-      console.error('Error response:', error?.response?.data);
-      console.error('Error status:', error?.response?.status);
-      console.error('Error message:', error?.message);
+      devError('[contractorsMutation] onError called');
+      devError('Upload error:', error);
+      devError('Error response:', error?.response?.data);
+      devError('Error status:', error?.response?.status);
+      devError('Error message:', error?.message);
       setContractorsResult(null);
       setContractorsErrors(null);
       setContractorsProgress(null);
@@ -550,15 +567,15 @@ export function AdminUploadPage() {
                   const errorData = await getBatchErrors(data.batch_id);
                   setContractorsTwoErrors(errorData.errors || []);
                 } catch (err) {
-                  console.error('Failed to fetch errors:', err);
+                  devError('Failed to fetch errors:', err);
                 }
               }
               return;
             }
           } catch (err) {
-            console.error('[pollProgress] Error fetching progress:', err);
-            console.error('[pollProgress] Error response:', err?.response?.data);
-            console.error('[pollProgress] Error status:', err?.response?.status);
+            devError('[pollProgress] Error fetching progress:', err);
+            devError('[pollProgress] Error response:', err?.response?.data);
+            devError('[pollProgress] Error status:', err?.response?.status);
             consecutiveErrors++;
             const isUnauthorized = err?.response?.status === 401;
             
@@ -568,14 +585,14 @@ export function AdminUploadPage() {
               const isRefreshFailed = err?.config?._retry === true;
               
               if (isRefreshFailed) {
-                console.error('[Progress Polling] Token refresh attempted but request still failed with 401');
-                console.error('[Progress Polling] This may indicate the new token is invalid or backend issue');
+                devError('[Progress Polling] Token refresh attempted but request still failed with 401');
+                devError('[Progress Polling] This may indicate the new token is invalid or backend issue');
                 // This means interceptor tried to refresh but request still failed
                 // Wait a bit longer before retrying to allow backend to sync
                 pollDelay = Math.min(pollDelay * 2, maxPollDelay);
                 
                 if (consecutiveErrors >= maxConsecutiveErrors) {
-                  console.error('[Progress Polling] Too many authentication failures after refresh, stopping polling');
+                  devError('[Progress Polling] Too many authentication failures after refresh, stopping polling');
                   isPolling = false;
                   if (timeoutId) {
                     clearTimeout(timeoutId);
@@ -593,20 +610,20 @@ export function AdminUploadPage() {
                 }
               } else {
                 // Interceptor is handling the refresh, just wait
-                console.log('[Progress Polling] 401 detected, waiting for token refresh...');
+                devLog('[Progress Polling] 401 detected, waiting for token refresh...');
                 // Don't count this as an error yet - interceptor will handle it
                 consecutiveErrors = Math.max(0, consecutiveErrors - 1); // Reduce error count
                 // Apply exponential backoff
                 pollDelay = Math.min(pollDelay * 1.5, maxPollDelay);
               }
             } else {
-              console.error('[Progress Polling] Failed to fetch progress:', err);
+              devError('[Progress Polling] Failed to fetch progress:', err);
               // Apply exponential backoff for other errors
               pollDelay = Math.min(pollDelay * 1.5, maxPollDelay);
               
               // For non-401 errors, stop after max errors
               if (consecutiveErrors >= maxConsecutiveErrors) {
-                console.error('[Progress Polling] Too many consecutive errors, stopping polling');
+                devError('[Progress Polling] Too many consecutive errors, stopping polling');
                 isPolling = false;
                 if (timeoutId) {
                   clearTimeout(timeoutId);
@@ -642,14 +659,14 @@ export function AdminUploadPage() {
             const errorData = await getBatchErrors(data.batch_id);
             setContractorsTwoErrors(errorData.errors || []);
           } catch (err) {
-            console.error('Failed to fetch errors:', err);
+            devError('Failed to fetch errors:', err);
           }
         }
       }
     },
     onError: (error) => {
-      console.error('Upload error:', error);
-      console.error('Error response:', error?.response?.data);
+      devError('Upload error:', error);
+      devError('Error response:', error?.response?.data);
       setContractorsTwoResult(null);
       setContractorsTwoErrors(null);
       setContractorsTwoProgress(null);
@@ -754,12 +771,12 @@ export function AdminUploadPage() {
 
   const submitContractors = (event) => {
     event.preventDefault();
-    console.log('[submitContractors] Called', { contractorsFile, hasFile: !!contractorsFile });
+    devLog('[submitContractors] Called', { contractorsFile, hasFile: !!contractorsFile });
     if (!contractorsFile) {
-      console.warn('[submitContractors] No file selected');
+      devWarn('[submitContractors] No file selected');
       return;
     }
-    console.log('[submitContractors] Starting mutation...');
+    devLog('[submitContractors] Starting mutation...');
     contractorsMutation.mutate(contractorsFile);
   };
 
@@ -1522,4 +1539,5 @@ export function AdminUploadPage() {
 }
 
 export default AdminUploadPage;
+
 

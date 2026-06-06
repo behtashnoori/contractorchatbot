@@ -3,41 +3,46 @@
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+ and npm
-- PostgreSQL 15 (required; use a local or remote instance and set `DATABASE_URL`)
+- PostgreSQL 15
 
 ### Backend (Flask)
-1. Create virtual environment:
+1. Create a virtual environment:
    ```powershell
    cd backend
    python -m venv .venv
    .\.venv\Scripts\activate
    pip install -r requirements.txt
    ```
-2. Copy environment template and fill **required** variables (the backend exits on startup if any are missing, empty, or unsafe):
 
-   | Variable | Requirement |
-   |----------|-------------|
-   | `DATABASE_URL` | Non-empty PostgreSQL SQLAlchemy URL (`postgresql+psycopg://…`). |
-   | `SECRET_KEY` | Non-empty, at least 32 characters, not a known placeholder (e.g. not `change-me`). |
-   | `JWT_SECRET_KEY` | Same as `SECRET_KEY`; you may use `JWT_SECRET` instead as an alias. |
-   | `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed origins (at least one); used for CORS and error-handler origins. |
-
+2. Copy the environment template and fill required variables:
    ```powershell
    copy config.example.env .env
    ```
 
-   Replace the long example secrets in `.env` with strong random values (e.g. `python -c "import secrets; print(secrets.token_urlsafe(48))"`).
+   Required variables:
 
-   Production: set `FLASK_ENV=production` and `FLASK_DEBUG=0` (DEBUG must be off).
-3. Initialise database:
+   | Variable | Requirement |
+   |----------|-------------|
+   | `DATABASE_URL` | PostgreSQL SQLAlchemy URL, for example `postgresql+psycopg://<DB_USER>:<DB_PASSWORD>@<DB_HOST>:<DB_PORT>/<DB_NAME>`. |
+   | `SECRET_KEY` | Strong random value, at least 32 characters. |
+   | `JWT_SECRET_KEY` | Strong random value, at least 32 characters. |
+   | `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed browser origins. |
+
+   Generate secrets locally:
    ```powershell
-   flask db init
-   flask db migrate -m "Initial tables"
+   python -c "import secrets; print(secrets.token_urlsafe(48))"
+   ```
+
+   Never commit `.env` or real connection strings. Use a secret manager for production.
+
+3. Initialise or upgrade the database:
+   ```powershell
    flask db upgrade
    ```
+
 4. Run the API:
    ```powershell
-   flask run --port 5000
+   flask run --port <API_PORT>
    ```
 
 ### Frontend (React + Vite)
@@ -46,29 +51,25 @@
    cd ..\frontend
    npm install
    ```
-2. Create `.env`:
+
+2. If the API is not on the default local address, create a local `.env`:
+   ```text
+   VITE_API_BASE_URL=http://<API_HOST>:<API_PORT>
    ```
-   VITE_API_BASE_URL=http://localhost:5000
-   ```
-3. Start dev server:
+
+3. Start the dev server:
    ```powershell
-   npm run dev -- --port 5173
+   npm run dev -- --port <FRONTEND_PORT>
    ```
 
 ### Useful Commands
-- Format lint (frontend):
+- Frontend lint and build:
   ```powershell
   npm run lint
   npm run build
   ```
-- Run backend tests (placeholder):
+
+- Backend tests:
   ```powershell
   pytest
   ```
-
-
-
-
-
-
-

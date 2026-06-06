@@ -9,8 +9,6 @@ export function ProtectedRoute({ redirectTo = '/login' }) {
   const location = useLocation();
   const { isAuthenticated, loading } = useAuth();
 
-  console.log('[ProtectedRoute] Loading:', loading, 'Authenticated:', isAuthenticated);
-
   if (loading) {
     return (
       <Box
@@ -34,11 +32,9 @@ export function ProtectedRoute({ redirectTo = '/login' }) {
   }
 
   if (!isAuthenticated) {
-    console.log('[ProtectedRoute] Not authenticated, redirecting to login');
     return <Navigate to={redirectTo} replace state={{ from: location }} />;
   }
 
-  console.log('[ProtectedRoute] Authenticated, rendering outlet');
   return <Outlet />;
 }
 

@@ -12,7 +12,7 @@ from app.models import Contractor, User
 
 pytestmark = pytest.mark.skipif(
     not (os.environ.get("TEST_DATABASE_URL") or "").strip(),
-    reason="TEST_DATABASE_URL not set",
+    reason="TEST_DATABASE_URL not set; see docs/TEST_DATABASE_SETUP.md",
 )
 
 
@@ -146,11 +146,11 @@ def test_rbac_staff_can_reach_upload_validation(client, app_ctx):
                 db.session.commit()
 
 
-def test_role_change_affects_next_request_without_new_login(client, app_ctx):
+def test_role_change_affects_next_request_without_new_login(client, app):
     """Authorization uses DB role; same access token works after role promotion/demotion."""
     username = f"pt_role_{_id_suffix()}"
     dc = f"ptdc{_id_suffix()}"
-    with app_ctx.app_context():
+    with app.app_context():
         c = Contractor(
             detail_code=dc,
             supplier_code="88",
@@ -183,24 +183,26 @@ def test_role_change_affects_next_request_without_new_login(client, app_ctx):
         blocked = client.post("/admin/uploads", headers=headers)
         assert blocked.status_code == 403
 
-        with app_ctx.app_context():
-            u = db.session.get(User, user_id)
-            u.role = "staff"
+        with app.app_context():
+            assert User.query.filter_by(username=username).update({"role": "staff"}) == 1
             db.session.commit()
+            assert User.query.filter_by(username=username).first().role == "staff"
+            db.session.remove()
 
         promoted = client.post("/admin/uploads", headers=headers)
         assert promoted.status_code == 400
         assert promoted.get_json().get("error") == "no_files"
 
-        with app_ctx.app_context():
-            u = db.session.get(User, user_id)
-            u.role = "contractor"
+        with app.app_context():
+            assert User.query.filter_by(username=username).update({"role": "contractor"}) == 1
             db.session.commit()
+            assert User.query.filter_by(username=username).first().role == "contractor"
+            db.session.remove()
 
         demoted = client.post("/admin/uploads", headers=headers)
         assert demoted.status_code == 403
     finally:
-        with app_ctx.app_context():
+        with app.app_context():
             u = db.session.get(User, user_id)
             if u:
                 db.session.delete(u)
@@ -208,3 +210,35 @@ def test_role_change_affects_next_request_without_new_login(client, app_ctx):
             if c_obj:
                 db.session.delete(c_obj)
             db.session.commit()
+
+
+def test_deleted_user_token_cannot_access_staff_upload(client, app):
+    """A token whose user row was deleted must not authorize admin endpoints."""
+    username = f"pt_deleted_{_id_suffix()}"
+    with app.app_context():
+        user = User(username=username, role="staff", must_change_password=False)
+        user.set_password("deleted-user-pass-12")
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.id
+
+    login = client.post(
+        "/auth/login",
+        json={"username": username, "password": "deleted-user-pass-12"},
+    )
+    assert login.status_code == 200
+    token = login.get_json()["access_token"]
+
+    with app.app_context():
+        user = db.session.get(User, user_id)
+        assert user is not None
+        db.session.delete(user)
+        db.session.commit()
+        db.session.remove()
+
+    res = client.post(
+        "/admin/uploads",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 404
+    assert res.get_json().get("error") == "not_found"

@@ -20,14 +20,14 @@ python -m venv .venv
 ```
 
 ### 3) Configure database connection for loader
-Set env vars (defaults already aligned with your instance):
+Set env vars. Do not commit real credentials; keep them only in your local environment or secret manager:
 
 ```bash
-set PGHOST=localhost
-set PGPORT=5432
-set PGUSER=postgres
-set PGPASSWORD=bagheri13
-set PGDATABASE=contractor_portal
+set PGHOST=<DB_HOST>
+set PGPORT=<DB_PORT>
+set PGUSER=<DB_USER>
+set PGPASSWORD=<DB_PASSWORD>
+set PGDATABASE=<DB_NAME>
 ```
 
 ### 4) Load your Excel/CSV into staging
@@ -166,4 +166,3 @@ Examples:
 -- by supplier name
 \i db/sql/reports_examples.sql
 ```
-

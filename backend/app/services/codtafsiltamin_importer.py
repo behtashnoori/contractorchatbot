@@ -7,7 +7,12 @@ import pandas as pd
 from werkzeug.datastructures import FileStorage
 
 from ..extensions import db
-from ..models import Contractor, ImportBatch, ImportError
+from ..models import Contractor, ImportBatch, ImportError, User
+from .import_activation import (
+    deactivate_active_rows,
+    mark_batch_published,
+    mark_previous_active_replaced,
+)
 from .import_utils import (
     normalize_code,
     normalize_str,
@@ -47,60 +52,78 @@ class CodTafsiltaminImporter:
             raise ValueError(f"خطا در خواندن فایل اکسل: {str(exc)}") from exc
 
         self._validate_headers(dataframe)
+        contractors, error_records = self._preflight_rows(dataframe)
+        if not contractors:
+            raise ValueError("codtafsiltamin import has no valid contractor rows.")
+        return self._publish_preflight_rows(contractors, error_records)
 
-        # Delete all existing data before importing new data
-        logger.info("codtafsiltamin import: clearing existing contractor directory data")
+    def _publish_preflight_rows(
+        self,
+        contractors: list[Contractor],
+        error_records: list[ImportError],
+    ) -> ImportResult:
+        try:
+            logger.info("codtafsiltamin import: publishing preflighted rows in one transaction")
+            previous_contractors_by_detail = {
+                contractor.detail_code: contractor.id
+                for contractor in Contractor.query.filter(Contractor.is_active.is_(True)).all()
+            }
+            mark_previous_active_replaced("codtafsiltamin", self.batch)
+            deactivate_active_rows("codtafsiltamin")
 
-        # First, delete all Contractor records (they may have dependent records, but FK is nullable)
-        deleted_contractors = db.session.query(Contractor).delete()
-        logger.info(
-            "codtafsiltamin import: deleted %s contractor rows", deleted_contractors
-        )
-        
-        # Then delete ImportError records for codtafsiltamin batches (excluding current batch)
-        codtafsiltamin_batch_ids = [
-            batch.id for batch in ImportBatch.query.filter_by(source="codtafsiltamin").all()
-            if batch.id != self.batch.id  # Exclude current batch
-        ]
-        if codtafsiltamin_batch_ids:
-            deleted_errors = ImportError.query.filter(ImportError.batch_id.in_(codtafsiltamin_batch_ids)).delete()
-            logger.info(
-                "codtafsiltamin import: deleted %s import_error rows", deleted_errors
-            )
-        
-        # Finally delete ImportBatch records (excluding current batch)
-        deleted_batches = ImportBatch.query.filter(
-            ImportBatch.source == "codtafsiltamin",
-            ImportBatch.id != self.batch.id  # Exclude current batch
-        ).delete()
-        logger.info(
-            "codtafsiltamin import: deleted %s prior codtafsiltamin batch rows",
-            deleted_batches,
-        )
-        
-        db.session.commit()
+            for contractor in contractors:
+                contractor.last_update_batch_id = self.batch.id
+                contractor.is_active = True
+                db.session.add(contractor)
+            db.session.flush()
+            for contractor in contractors:
+                previous_id = previous_contractors_by_detail.get(contractor.detail_code)
+                if previous_id:
+                    User.query.filter_by(contractor_id=previous_id).update(
+                        {User.contractor_id: contractor.id},
+                        synchronize_session=False,
+                    )
+            for error_record in error_records:
+                db.session.add(error_record)
 
-        inserted, updated, errors = 0, 0, 0
+            total_rows = len(contractors) + len(error_records)
+            self.batch.total_rows = total_rows
+            self.batch.rows_processed = total_rows
+            self.batch.progress_percentage = 100.0 if total_rows else 0.0
+            mark_batch_published(self.batch)
+
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("codtafsiltamin publish failed; transaction rolled back")
+            raise
+
+        return ImportResult(inserted=len(contractors), updated=0, errors=len(error_records))
+
+    def _preflight_rows(self, dataframe: pd.DataFrame) -> tuple[list[Contractor], list[ImportError]]:
+        contractors: list[Contractor] = []
+        error_records: list[ImportError] = []
+        seen_detail_codes: set[str] = set()
 
         for index, row in dataframe.iterrows():
             try:
                 contractor = self._create_contractor(row)
-                db.session.add(contractor)
-                inserted += 1
-            except Exception as exc:  # pragma: no cover - defensive
-                errors += 1
-                db.session.add(
+                if contractor.detail_code in seen_detail_codes:
+                    raise ValueError(f"Duplicate detail_code in import file: {contractor.detail_code}")
+                seen_detail_codes.add(contractor.detail_code)
+                contractors.append(contractor)
+            except Exception as exc:
+                error_records.append(
                     ImportError(
                         batch_id=self.batch.id,
                         source_file="codtafsiltamin",
-                        row_index=int(index) + 2,  # +2 for header + 1-index
-                        message=str(exc),
+                        row_index=int(index) + 2,
+                        message=str(exc)[:255],
                         payload=row_payload_from_series(row),
                     )
                 )
 
-        db.session.commit()
-        return ImportResult(inserted=inserted, updated=updated, errors=errors)
+        return contractors, error_records
 
     def _validate_headers(self, frame: pd.DataFrame) -> None:
         # Normalize both dataframe columns and expected columns for comparison
@@ -130,8 +153,6 @@ class CodTafsiltaminImporter:
             status=normalize_str(row.get("وضعیت")) or "نامشخص",
             type=normalize_str(row.get("نوع")),
             raw_payload=row_payload_from_series(row),
-            last_update_batch_id=self.batch.id,
         )
 
         return contractor
-

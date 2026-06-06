@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import logging
-import traceback
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -12,7 +11,13 @@ from convertdate import persian
 from werkzeug.datastructures import FileStorage
 
 from ..extensions import db
-from ..models import ImportBatch, ImportError, InvoiceDetail, InvoiceSummary
+from ..models import ImportBatch, ImportError, InvoiceDetail, InvoiceSummary, utc_now
+from .import_activation import (
+    active_filter,
+    deactivate_active_rows,
+    mark_batch_published,
+    mark_previous_active_replaced,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,143 +61,98 @@ class ContractorsTwoImporter:
             raise ValueError("خطا در خواندن فایل اکسل") from exc
 
         self._prepare_columns(dataframe)
+        preflight_insert_data, preflight_error_records = self._preflight_rows(dataframe)
+        if not preflight_insert_data:
+            raise ValueError("contractors-2 import has no valid invoice detail rows.")
+        logger.info(
+            "Preflight completed for contractors-2: valid_rows=%s row_errors=%s",
+            len(preflight_insert_data),
+            len(preflight_error_records),
+        )
+        return self._publish_preflight_rows(
+            preflight_insert_data,
+            preflight_error_records,
+            len(dataframe),
+        )
 
-        # Delete all existing data before importing new data
-        logger.info("Deleting existing data")
 
-        # First, delete all InvoiceDetail records (they reference ImportBatch)
-        deleted_details = db.session.query(InvoiceDetail).delete()
-        logger.info("Deleted %s existing InvoiceDetail records", deleted_details)
-        
-        # Then delete ImportError records for contractors-2 batches (excluding current batch)
-        contractors_two_batch_ids = [
-            batch.id for batch in ImportBatch.query.filter_by(source="contractors-2").all()
-            if batch.id != self.batch.id  # Exclude current batch
-        ]
-        if contractors_two_batch_ids:
-            deleted_errors = ImportError.query.filter(ImportError.batch_id.in_(contractors_two_batch_ids)).delete()
-            logger.info("Deleted %s ImportError records", deleted_errors)
-        
-        # Finally delete ImportBatch records (excluding current batch)
-        deleted_batches = ImportBatch.query.filter(
-            ImportBatch.source == "contractors-2",
-            ImportBatch.id != self.batch.id  # Exclude current batch
-        ).delete()
-        logger.info("Deleted %s ImportBatch records", deleted_batches)
-        
-        db.session.commit()
-
-        inserted, updated, errors = 0, 0, 0
-        total_rows = len(dataframe)
-        
-        # Update batch with total rows
-        self.batch.total_rows = total_rows
-        self.batch.rows_processed = 0
-        self.batch.progress_percentage = 0.0
-        db.session.commit()
-        
-        # Use COPY command for large files (>1000 rows) - much faster
-        USE_COPY = total_rows > 1000
-        if USE_COPY:
-            logger.info("Using COPY command for large file (%s rows)", total_rows)
-            return self._run_with_copy(dataframe, total_rows)
-        
-        # Adaptive batch size: larger batches for larger files, but cap at 1000
-        BATCH_SIZE = min(max(200, total_rows // 10), 1000)
-        logger.info("Using batch size: %s for %s rows", BATCH_SIZE, total_rows)
-        
+    def _preflight_rows(self, dataframe: pd.DataFrame) -> tuple[list[dict], list[dict]]:
         rows_dict = dataframe.to_dict('records')
-        
-        # First pass: collect all cover_numbers for InvoiceSummary lookup
         cover_numbers_in_file = set()
         for row_dict in rows_dict:
-            cover_number = self._normalize_code(self._value_for_dict(row_dict, "cover_number"))  # ستون "شماره" همان cover_number است
+            cover_number = self._normalize_code(self._value_for_dict(row_dict, "cover_number"))
             if cover_number:
                 cover_numbers_in_file.add(cover_number)
 
-        # Pre-load InvoiceSummary records برای استخراج detail_code و supplier_code
         summaries_by_cover = {
             s.cover_number: s
             for s in InvoiceSummary.query.filter(
+                active_filter(InvoiceSummary),
                 InvoiceSummary.cover_number.in_(cover_numbers_in_file)
             ).all()
         }
-        logger.info(
-            "Loaded %s InvoiceSummary records for cover_number mapping",
-            len(summaries_by_cover),
-        )
-        
-        # Prepare bulk data
-        logger.info("Processing %s rows", total_rows)
-        
-        insert_data = []
-        error_records = []
-        
-        # Disable autoflush for better performance
-        original_autoflush = db.session.autoflush
-        db.session.autoflush = False
-        
+
+        insert_data: list[dict] = []
+        error_records: list[dict] = []
+        for idx, row_dict in enumerate(rows_dict):
+            try:
+                cover_number = self._normalize_code(self._value_for_dict(row_dict, "cover_number"))
+                if not cover_number:
+                    raise ValueError("شماره روکش خالی است")
+
+                summary = summaries_by_cover.get(cover_number)
+                data = self._prepare_detail_data(row_dict, cover_number, summary, idx)
+                now = utc_now()
+                data['created_at'] = now
+                data['updated_at'] = now
+                insert_data.append(data)
+            except Exception as exc:
+                now = utc_now()
+                error_records.append({
+                    'batch_id': self.batch.id,
+                    'source_file': 'contractors-2',
+                    'row_index': idx + 2,
+                    'message': str(exc)[:255],
+                    'payload': row_dict,
+                    'created_at': now,
+                    'updated_at': now,
+                })
+
+        return insert_data, error_records
+
+    def _publish_preflight_rows(
+        self,
+        insert_data: list[dict],
+        error_records: list[dict],
+        total_rows: int,
+    ) -> ImportResult:
+        inserted = len(insert_data)
+        updated = 0
+        errors = len(error_records)
+
         try:
-            for idx, row_dict in enumerate(rows_dict):
-                try:
-                    # در فایل 2، ستون "شماره" همان cover_number است
-                    cover_number = self._normalize_code(self._value_for_dict(row_dict, "cover_number"))
-                    if not cover_number:
-                        raise ValueError("شماره روکش خالی است")
-                    
-                    # استفاده از summary برای استخراج detail_code و supplier_code
-                    summary = summaries_by_cover.get(cover_number)
-                    
-                    # Prepare data dict - invoice_no به صورت ترکیبی ساخته می‌شود
-                    data = self._prepare_detail_data(row_dict, cover_number, summary, idx)
-                    
-                    # Always insert new (no update logic)
-                    data['created_at'] = datetime.utcnow()
-                    data['updated_at'] = datetime.utcnow()
-                    insert_data.append(data)
-                    inserted += 1
-                    
-                    # Batch processing
-                    if (idx + 1) % BATCH_SIZE == 0:
-                        self._bulk_process_insert_only(insert_data, error_records)
-                        insert_data = []
-                        error_records = []
-                        
-                        # Update progress
-                        self.batch.update_progress(idx + 1, total_rows)
-                        
-                        logger.info(
-                            "Processed batch: %s/%s rows inserted=%s errors=%s",
-                            idx + 1,
-                            total_rows,
-                            inserted,
-                            errors,
-                        )
-                        
-                except Exception as exc:
-                    errors += 1
-                    now = datetime.utcnow()
-                    error_records.append({
-                        'batch_id': self.batch.id,
-                        'source_file': 'contractors-2',
-                        'row_index': idx + 2,
-                        'message': str(exc)[:255],
-                        'payload': row_dict,
-                        'created_at': now,
-                        'updated_at': now,
-                    })
-            
-            # Final batch
-            if insert_data or error_records:
-                self._bulk_process_insert_only(insert_data, error_records)
-            
-            # Final progress update
-            self.batch.update_progress(total_rows, total_rows)
-            
-        finally:
-            # Restore original autoflush setting
-            db.session.autoflush = original_autoflush
-        
+            logger.info("Publishing preflighted contractors-2 rows in one transaction")
+            mark_previous_active_replaced("contractors-2", self.batch)
+            deactivate_active_rows("contractors-2")
+
+            self.batch.total_rows = total_rows
+            self.batch.rows_processed = total_rows
+            self.batch.progress_percentage = 100.0 if total_rows else 0.0
+            mark_batch_published(self.batch)
+
+            if insert_data:
+                for row in insert_data:
+                    row["is_active"] = True
+                db.session.bulk_insert_mappings(InvoiceDetail, insert_data)
+            if error_records:
+                db.session.bulk_insert_mappings(ImportError, error_records)
+
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("contractors-2 publish failed; transaction rolled back")
+            raise
+
         logger.info("Final commit completed: inserted=%s errors=%s", inserted, errors)
         return ImportResult(inserted=inserted, updated=updated, errors=errors)
 
@@ -227,7 +187,10 @@ class ContractorsTwoImporter:
             supplier_code = summary.supplier_code
         else:
             # اگر summary موجود نبود، از query استفاده می‌کنیم (فقط برای موارد نادر)
-            summary = InvoiceSummary.query.filter_by(cover_number=cover_number).first()
+            summary = InvoiceSummary.query.filter(
+                active_filter(InvoiceSummary),
+                InvoiceSummary.cover_number == cover_number,
+            ).first()
             if summary:
                 detail_code = summary.detail_code
                 supplier_code = summary.supplier_code
@@ -280,131 +243,6 @@ class ContractorsTwoImporter:
                     pass
                 payload[str(col_name)] = value
         return payload
-
-    def _bulk_process(self, insert_data: list, update_data: list, error_records: list):
-        """Bulk insert/update and error handling - commits after each batch for better performance"""
-        try:
-            if insert_data:
-                db.session.bulk_insert_mappings(InvoiceDetail, insert_data)
-            if update_data:
-                db.session.bulk_update_mappings(InvoiceDetail, update_data)
-            if error_records:
-                db.session.bulk_insert_mappings(ImportError, error_records)
-            db.session.commit()
-        except Exception as exc:
-            db.session.rollback()
-            logger.exception("Error in _bulk_process: %s", exc)
-            traceback.print_exc()
-            raise
-
-    def _bulk_process_insert_only(self, insert_data: list, error_records: list):
-        """Bulk insert only (no update) - commits after each batch for better performance"""
-        try:
-            if insert_data:
-                db.session.bulk_insert_mappings(InvoiceDetail, insert_data)
-            if error_records:
-                db.session.bulk_insert_mappings(ImportError, error_records)
-            db.session.commit()
-        except Exception as exc:
-            db.session.rollback()
-            logger.exception("Error in _bulk_process_insert_only: %s", exc)
-            traceback.print_exc()
-            raise
-
-    def _run_with_copy(self, dataframe: pd.DataFrame, total_rows: int) -> ImportResult:
-        """Use PostgreSQL COPY command for fast bulk insert (10-50x faster for large files)"""
-        inserted, updated, errors = 0, 0, 0
-        rows_dict = dataframe.to_dict('records')
-        
-        # Pre-load cover_numbers (در فایل 2، ستون "شماره" همان cover_number است)
-        cover_numbers_in_file = set()
-        for row_dict in rows_dict:
-            cover_number = self._normalize_code(self._value_for_dict(row_dict, "cover_number"))  # ستون "شماره"
-            if cover_number:
-                cover_numbers_in_file.add(cover_number)
-        
-        # Pre-load InvoiceSummary records برای استخراج detail_code و supplier_code
-        summaries_by_cover = {
-            s.cover_number: s
-            for s in InvoiceSummary.query.filter(
-                InvoiceSummary.cover_number.in_(cover_numbers_in_file)
-            ).all()
-        }
-        
-        # Prepare data (only insert, no update)
-        insert_rows = []
-        error_records = []
-        
-        for idx, row_dict in enumerate(rows_dict):
-            try:
-                # در فایل 2، ستون "شماره" همان cover_number است
-                cover_number = self._normalize_code(self._value_for_dict(row_dict, "cover_number"))
-                if not cover_number:
-                    raise ValueError("شماره روکش خالی است")
-                
-                # استفاده از summary برای استخراج detail_code و supplier_code
-                summary = summaries_by_cover.get(cover_number)
-                data = self._prepare_detail_data(row_dict, cover_number, summary, idx)
-                
-                # Always insert new (no update logic)
-                data['created_at'] = datetime.utcnow()
-                data['updated_at'] = datetime.utcnow()
-                insert_rows.append(data)
-                inserted += 1
-                
-                # Update progress every 100 rows
-                if (idx + 1) % 100 == 0:
-                    self.batch.update_progress(idx + 1, total_rows)
-                    
-            except Exception as exc:
-                errors += 1
-                now = datetime.utcnow()
-                error_records.append({
-                    'batch_id': self.batch.id,
-                    'source_file': 'contractors-2',
-                    'row_index': idx + 2,
-                    'message': str(exc)[:255],
-                    'payload': row_dict,
-                    'created_at': now,
-                    'updated_at': now,
-                })
-        
-        # Use COPY for inserts (very fast!)
-        # If insert fails, we must raise exception to prevent incorrect metrics
-        if insert_rows:
-            self._copy_insert(insert_rows)
-        
-        # Insert errors
-        try:
-            if error_records:
-                db.session.bulk_insert_mappings(ImportError, error_records)
-                db.session.commit()
-                logger.info("Successfully inserted %s error records", len(error_records))
-        except Exception as exc:
-            logger.exception("Error inserting error records: %s", exc)
-            db.session.rollback()
-            traceback.print_exc()
-        
-        # Final progress update
-        self.batch.update_progress(total_rows, total_rows)
-        
-        logger.info("COPY completed: inserted=%s errors=%s", inserted, errors)
-        return ImportResult(inserted=inserted, updated=updated, errors=errors)
-    
-    def _copy_insert(self, rows: list[dict]):
-        """Use PostgreSQL COPY for fast bulk insert"""
-        if not rows:
-            return
-        
-        try:
-            db.session.bulk_insert_mappings(InvoiceDetail, rows)
-            db.session.commit()
-            logger.info("Successfully inserted %s rows", len(rows))
-        except Exception as exc:
-            db.session.rollback()
-            logger.exception("Error inserting %s rows: %s", len(rows), exc)
-            traceback.print_exc()
-            raise
 
     def _value_for_dict(self, row_dict: dict, key: str) -> Any:
         """Get value from dict row (faster than Series)"""

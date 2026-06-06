@@ -5,11 +5,11 @@
 python -m venv .venv
 .venv\Scripts\pip install -r api/requirements.txt
 
-set PGHOST=localhost
-set PGPORT=5432
-set PGUSER=postgres
-set PGPASSWORD=bagheri13
-set PGDATABASE=contractor_portal
+set PGHOST=<DB_HOST>
+set PGPORT=<DB_PORT>
+set PGUSER=<DB_USER>
+set PGPASSWORD=<DB_PASSWORD>
+set PGDATABASE=<DB_NAME>
 
 set FLASK_APP=api/app.py
 .venv\Scripts\python -m flask run --port 5001
@@ -34,5 +34,4 @@ curl "http://localhost:5001/api/kpi/yearly?supplier_uid=732-0026968&source=invoi
 # export
 curl -OJ "http://localhost:5001/api/kpi/yearly/export?supplier_uid=732-0026968&format=csv"
 ```
-
 

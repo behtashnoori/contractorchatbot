@@ -1,19 +1,8 @@
-import { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
 import Slide from '@mui/material/Slide';
-
-const NotificationContext = createContext({
-  showNotification: () => {},
-});
-
-export const useNotification = () => {
-  const context = useContext(NotificationContext);
-  if (!context) {
-    throw new Error('useNotification must be used within NotificationProvider');
-  }
-  return context;
-};
+import { NotificationContext } from '../context/NotificationContext.js';
 
 function SlideTransition(props) {
   return <Slide {...props} direction="up" />;
