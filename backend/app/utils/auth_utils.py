@@ -13,6 +13,15 @@ from ..extensions import db
 from ..models import User
 from .api_errors import error_response
 
+ACTIVE_CONTRACTOR_STATUSES = frozenset(
+    {
+        "فعال",
+        "\u0638\u067e\u0637\xb9\u0637\xa7\u0638\u201e",
+        "葳轻",
+        "賮毓丕賱",
+    }
+)
+
 
 def resolve_user_id(identity) -> uuid.UUID | None:
     """
@@ -46,6 +55,11 @@ def user_has_staff_access(user) -> bool:
         return False
     role = getattr(user, "role", None) or "contractor"
     return role in ("staff", "admin")
+
+
+def contractor_status_is_active(status: str | None) -> bool:
+    """Accept the current Persian value plus legacy mojibake values already present in data/tests."""
+    return (status or "").strip() in ACTIVE_CONTRACTOR_STATUSES
 
 
 def get_jwt_subject_uuid() -> uuid.UUID | None:
@@ -100,7 +114,7 @@ def load_authenticated_user() -> tuple[User | None, tuple | None]:
     user = load_user_from_database(uid)
     if user is None:
         return None, error_response(404, "not_found", "User not found.")
-    if not user_has_staff_access(user) and user.contractor and not user.contractor.is_active:
+    if user.contractor and not user.contractor.is_active:
         return None, error_response(403, "forbidden", "Contractor account is inactive.")
     return user, None
 

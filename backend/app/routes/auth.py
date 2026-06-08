@@ -18,6 +18,7 @@ from ..services.import_activation import active_filter
 from ..utils.api_errors import error_response
 from ..utils.auth_decorators import require_jwt_user
 from ..utils.auth_utils import (
+    contractor_status_is_active,
     generate_password,
     generate_username,
     generate_username_variants,
@@ -157,7 +158,7 @@ def login():
             "inactive_contractor",
             "Contractor account is inactive.",
         )
-    if contractor and contractor.status != "فعال":
+    if contractor and not contractor_status_is_active(contractor.status):
         return error_response(
             403,
             "inactive_contractor",

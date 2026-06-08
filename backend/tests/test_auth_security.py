@@ -242,3 +242,67 @@ def test_deleted_user_token_cannot_access_staff_upload(client, app):
     )
     assert res.status_code == 404
     assert res.get_json().get("error") == "not_found"
+
+
+def test_inactive_contractor_token_cannot_continue_or_refresh(client, app):
+    """Existing tokens stop working after the linked contractor is deactivated."""
+    username = f"pt_inactive_{_id_suffix()}"
+    dc = f"ptinactive{_id_suffix()}"[:32]
+    with app.app_context():
+        contractor = Contractor(
+            detail_code=dc,
+            supplier_code="77",
+            name="Pytest Inactive",
+            status="ظپط¹ط§ظ„",
+            type="test",
+            is_active=True,
+        )
+        db.session.add(contractor)
+        db.session.flush()
+        user = User(
+            username=username,
+            contractor_id=contractor.id,
+            role="contractor",
+            must_change_password=False,
+        )
+        user.set_password("inactive-token-pass-12")
+        db.session.add(user)
+        db.session.commit()
+        contractor_id = contractor.id
+
+    try:
+        login = client.post(
+            "/auth/login",
+            json={"username": username, "password": "inactive-token-pass-12"},
+        )
+        assert login.status_code == 200
+        tokens = login.get_json()
+
+        with app.app_context():
+            contractor = db.session.get(Contractor, contractor_id)
+            contractor.is_active = False
+            db.session.commit()
+            db.session.remove()
+
+        access_res = client.get(
+            "/auth/me",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert access_res.status_code == 403
+        assert access_res.get_json().get("error") == "forbidden"
+
+        refresh_res = client.post(
+            "/auth/refresh",
+            headers={"Authorization": f"Bearer {tokens['refresh_token']}"},
+        )
+        assert refresh_res.status_code == 403
+        assert refresh_res.get_json().get("error") == "forbidden"
+    finally:
+        with app.app_context():
+            u = User.query.filter_by(username=username).first()
+            if u:
+                db.session.delete(u)
+            c = Contractor.query.filter_by(detail_code=dc).first()
+            if c:
+                db.session.delete(c)
+            db.session.commit()
